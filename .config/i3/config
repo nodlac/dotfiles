@@ -610,3 +610,4 @@ bindsym $mod+n exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-clien
 bindsym $mod+g exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t goals-app || tmux new-session -s goals-app"
 bindsym $mod+a exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t AOC || tmux new-session -s AOC"
 bindsym $mod+b exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t BD || tmux new-session -s BD"
+bindsym $mod+p exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t POS || tmux new-session -s POS"
