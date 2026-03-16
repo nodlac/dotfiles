@@ -12,3 +12,6 @@ This is a bare repo with all untracked hidden. I'm just adding things that I'd l
 
 There will be on repo for work and personal with anything proprietary abstracted
 
+
+# i3
+    I crashed this guy twice. The best thing to do is reinstall i3 from the github https://github.com/endeavouros-team/endeavouros-i3wm-setup then override the config file
