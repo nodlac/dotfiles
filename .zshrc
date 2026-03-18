@@ -12,12 +12,25 @@ export PATH="$HOME/.opencode/bin:$PATH"
 export EDITOR=vim
 export VISUAL=vim
 
+# Loads Environment variables
+[ -f ~/.env ] && source ~/.env
+
 # ===========================================
 # Aliases
 # ===========================================
 alias ls='ls --color=auto'
 alias grep='grep --color=auto'
 alias df='git --git-dir=$HOME/.dotfiles/ --work-tree=$HOME'
+alias git diff="git diff --color-words"
+
+
+
+# ===========================================
+# Functions
+# ===========================================
+sync-notes() {
+    ~/work_scripts/sync-notes.sh
+}
 
 # ===========================================
 # Prompt
@@ -98,5 +111,5 @@ zstyle ':completion:*:descriptions' format '%B%d%b'
 # ===========================================
 # Load work aliases if on work machine
 if [[ "$MACHINE_ENV" == "work" ]]; then
-  source ~/.zsh/aliases-work.zsh
-fi   
+  source ~/.zsh/.vidangel.zsh
+fi
