@@ -69,3 +69,8 @@ vim.keymap.set('n', 's', 'xi')
 
 -- remap rename
 vim.keymap.set('n', '<leader>rn', 'grn')
+
+-- sprint-sync: save notes, sync with ClickUp, pull changes
+vim.keymap.set('n', '<leader>ss', '<cmd>w | botright split | terminal sprint-sync<CR>', {
+    desc = 'Sprint sync (save, sync ClickUp, pull changes)'
+})
