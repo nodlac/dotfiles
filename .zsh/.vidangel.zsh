@@ -154,70 +154,19 @@ vidangel-celery-worker() {
 
 
 ##########################################################
+# Agent task management
+##########################################################
+source ~/work_scripts/agent-tools.sh
+
+##########################################################
 # Work exports
 ##########################################################
 export ANDROID_HOME=$HOME/Library/Android/sdk
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
-
-##########################################################
-# Work Alias
-##########################################################
-alias bim="python3 ~/vidangel-repo/vidangel-backend/manage.py"
-alias va-management='eva -i i-00d603407628a0d0e'
-alias vault-refresh-token="vault login -method=userpass username=$VAULT_USER password=$VAULT_PASS"
-
-
-##########################################################
-# Vi mode
-##########################################################
-set -o vi
-
-# Cursor: block in normal mode, beam in insert mode
-if [ -n "$BASH_VERSION" ]; then
-  bind 'set show-mode-in-prompt on'
-  bind '"\\e[?2004h": ""'  # optional: bracketed paste
-  
-  # Cursor shape via readline
-  bind 'set vi-ins-mode-string \1\e[6 q\2'
-  bind 'set vi-cmd-mode-string \1\e[2 q\2'
-
-elif [ -n "$ZSH_VERSION" ]; then
-  bindkey -v
-
-  zle-keymap-select() {
-    if [[ $KEYMAP == vicmd ]]; then
-      echo -ne '\e[2 q'  # block
-    else
-      echo -ne '\e[6 q'  # beam
-    fi
-  }
-  zle -N zle-keymap-select
-
-  zle-line-init() { echo -ne '\e[6 q'; }
-  zle -N zle-line-init
-fi
-
-# Reset cursor to beam on exit
-trap 'echo -ne "\e[6 q"' EXIT
-
-
-autoload -Uz compinit && compinit
-# Show a menu when you hit tab
-zstyle ':completion:*' menu select
-# List descriptions for options (the gray text in Fish)
-zstyle ':completion:*' verbose yes
-zstyle ':completion:*:descriptions' format '%B%d%b'
-zstyle ':completion:*:messages' format '%d'
-zstyle ':completion:*:warnings' format 'No matches for: %d'
-
-
-##########################################################
-# Agent task management
-##########################################################
-source ~/work_scripts/agent-tools.sh
-
+export BIM_CONN="host='127.0.0.1' port=24601 dbname='vidangel' user='$BIM_USER' password='$BIM_PASS'"
+export FINNEGAN_CONN="host='127.0.0.1' port=24603 dbname='vidangel' user='$FINNEGAN_USER' password='$FINNEGAN_PASS'"
 
 ##########################################################
 # PATH extensions
@@ -225,9 +174,12 @@ source ~/work_scripts/agent-tools.sh
 export PATH=$PATH:$ANDROID_HOME/platform-tools
 export PATH="/opt/homebrew/opt/ruby/bin:$PATH"
 
+##########################################################
+# Work Alias
+##########################################################
+alias bim="python3 ~/vidangel-repo/vidangel-backend/manage.py"
+alias va-management='eva -i i-00d603407628a0d0e'
+alias vault-refresh-token="vault login -method=userpass username=$VAULT_USER password=$VAULT_PASS"
+alias p-bim="pgcli -h localhost -p 24603 -d vidangel -u $FINNEGAN_USER -W $FINNEGAN_PASS"
+alias p-finnegan=""
 
-##########################################################
-# Exports
-##########################################################
-export BIM_CONN="host='127.0.0.1' port=24601 dbname='vidangel' user='$BIM_USER' password='$BIM_PASS'"
-export FINNEGAN_CONN="host='127.0.0.1' port=24603 dbname='vidangel' user='$FINNEGAN_USER' password='$FINNEGAN_PASS'"
