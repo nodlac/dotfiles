@@ -147,6 +147,8 @@ vidangel-status-backend() {
 }
 
 vidangel-celery-worker() {
+    cd ~/vidangel-repo/vidangel-backend/
+    source .venv/bin/activate
     DJANGO_SETTINGS_MODULE=vidangel_backend.settings.dev     watchmedo auto-restart -d ./apps -p "*.py" -R -- celery -A vidangel_backend worker -l INFO -P processes -E -c8
 }
 
