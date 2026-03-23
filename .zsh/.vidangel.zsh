@@ -17,7 +17,7 @@ vidangel-restore-dev-dump() {
 
     if [ ! -f "$DUMP_FILE" ]; then
       echo "Error: dump file not found at $DUMP_FILE"
-      exit 1
+      return 1 2>/dev/null || exit 1
     fi
     psql -h localhost -p 5432 -U root -d postgres -c "CREATE ROLE pgadmin WITH SUPERUSER LOGIN PASSWORD 'dev';"
     psql -h localhost -p 5432 -U root -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'vidangel';"
@@ -25,12 +25,8 @@ vidangel-restore-dev-dump() {
     pg_restore -h localhost -p 5432 -U pgadmin -x -C -d postgres $DUMP_FILE
 }
 
-vidangel-start-backend() {
-    echo "====================================================="
-    echo ""
-    echo "Did you remember to open docker?"
-    echo ""
-    echo "====================================================="
+vidangel-setup-backend() {
+    colima restart
     cd ~/vidangel-repo/vidangel-backend
     git pull
     uv sync
@@ -96,20 +92,25 @@ vidangel-start-backend() {
     else
         echo "  typesense already running"
     fi
+    vidangel-reset-server
 }
 
-vidangel-reset-serve() {
+vidangel-reset-server() {
+    cd ~/vidangel-repo/vidangel-backend/
+    source .venv/bin/activate
+    uv sync --all-groups
+
     python3 manage.py makemigrations
     python3 manage.py migrate
     # Sets the base values for the popularity score in our index.
-    python manage.py run_update_popularity
+    python3 manage.py run_update_popularity
     # This destroys the current search index and rebuilds from scratch.
     #  It doesn't take too long and helps prevent out of sync issues with the index.
-    python manage.py update_search
+    python3 manage.py update_search
     # Update the Offerings View which will create a modified_at history 
     #  in Redis for incremental search updates.
-    python manage.py offerings_materialized_view -r
-    python manage.py offerings_materialized_view -c
+    python3 manage.py offerings_materialized_view -r
+    python3 manage.py offerings_materialized_view -c
     # # Run the "test suite" of canned searches.
     # python manage.py score_search_test
 }

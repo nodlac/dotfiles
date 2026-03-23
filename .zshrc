@@ -7,6 +7,7 @@
 # PATH and Environment
 # ===========================================
 export PATH="$HOME/.local/bin:$PATH"
+export PATH="/opt/homebrew/opt/libpq/bin:$PATH"
 export PATH="$PATH:$(go env GOPATH)/bin"
 export PATH="$HOME/.opencode/bin:$PATH"
 export EDITOR=vim
@@ -18,6 +19,7 @@ export VISUAL=vim
 # ===========================================
 # Aliases
 # ===========================================
+alias python='python3'
 alias ls='ls --color=auto'
 alias grep='grep --color=auto'
 alias df='git --git-dir=$HOME/.dotfiles/ --work-tree=$HOME'
