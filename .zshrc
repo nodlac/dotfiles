@@ -31,7 +31,7 @@ alias ls='ls --color=auto'
 alias grep='grep --color=auto'
 alias df='git --git-dir=$HOME/.dotfiles/ --work-tree=$HOME'
 alias git diff="git diff --color-words"
-
+alias tmux='tmux new-session -A -s settings'
 
 
 # ===========================================
@@ -112,15 +112,6 @@ zstyle ':completion:*' list-colors "${(s.:.)LS_COLORS}"
 # Group completions
 zstyle ':completion:*' group-name ''
 zstyle ':completion:*:descriptions' format '%B%d%b'
-
-
-# ===========================================
-# Tmux 
-# ===========================================
-# no new sessions
-if command -v tmux &> /dev/null && [ -n "$PS1" ] && [[ ! "$TERM" =~ screen ]] && [[ ! "$TERM" =~ tmux ]] && [ -z "$TMUX" ]; then
-  exec tmux new-session -A -s settings
-fi
 
 # ===========================================
 # Work Specific Aliases
