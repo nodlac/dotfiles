@@ -10,11 +10,18 @@ export PATH="$HOME/.local/bin:$PATH"
 export PATH="/opt/homebrew/opt/libpq/bin:$PATH"
 export PATH="$PATH:$(go env GOPATH)/bin"
 export PATH="$HOME/.opencode/bin:$PATH"
-export EDITOR=vim
-export VISUAL=vim
 
 # Loads Environment variables
 [ -f ~/.env ] && source ~/.env
+
+# ===========================================
+# Exports
+# ===========================================
+export EDITOR=vim
+export VISUAL=vim
+export PYENV_ROOT="$HOME/.pyenv"
+[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
+eval "$(pyenv init - zsh)"
 
 # ===========================================
 # Aliases

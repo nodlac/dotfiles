@@ -83,7 +83,6 @@ I hope you enjoy your Neovim journey,
 
 P.S. You can delete this when you're done too. It's your config now! :)
 --]]
-
 -- Set <space> as the leader key
 -- See `:help mapleader`
 --  NOTE: Must happen before plugins are loaded (otherwise wrong leader will be used)
@@ -94,7 +93,7 @@ vim.g.maplocalleader = ' '
 vim.g.have_nerd_font = false
 
 -- Cursor: block in normal/visual, beam in insert
-vim.opt.guicursor = "n-v-c:block,i-ci-ve:ver25,r-cr:hor20,o:hor50"
+vim.opt.guicursor = 'n-v-c:block,i-ci-ve:ver25,r-cr:hor20,o:hor50'
 
 -- [[ Setting options ]]
 -- See `:help vim.o`
@@ -696,6 +695,9 @@ require('lazy').setup({
         gopls = {},
         pyright = {},
         html = {},
+        ts_ls = {},
+        cssls = {},
+        -- volar = {}, (
         emmet_ls = {
           filetypes = {
             'html',
@@ -704,7 +706,7 @@ require('lazy').setup({
             'typescriptreact',
             'vue',
           },
-          init_optins = {
+          init_options = {
             html = {
               options = {
                 ['bem.enabled'] = true,
@@ -712,16 +714,6 @@ require('lazy').setup({
             },
           },
         },
-        -- rust_analyzer = {},
-        -- ... etc. See `:help lspconfig-all` for a list of all the pre-configured LSPs
-        --
-        -- Some languages (like typescript) have entire language plugins that can be useful:
-        --    https://github.com/pmizio/typescript-tools.nvim
-        --
-        -- But for many setups, the LSP (`ts_ls`) will work just fine
-        ts_ls = {},
-        --
-
         lua_ls = {
           -- cmd = { ... },
           -- filetypes = { ... },
@@ -736,6 +728,14 @@ require('lazy').setup({
             },
           },
         },
+        -- rust_analyzer = {},
+        -- ... etc. See `:help lspconfig-all` for a list of all the pre-configured LSPs
+        --
+        -- Some languages (like typescript) have entire language plugins that can be useful:
+        --    https://github.com/pmizio/typescript-tools.nvim
+        --
+        -- But for many setups, the LSP (`ts_ls`) will work just fine
+        --
       }
 
       -- Ensure the servers and tools above are installed
@@ -754,6 +754,12 @@ require('lazy').setup({
       local ensure_installed = vim.tbl_keys(servers or {})
       vim.list_extend(ensure_installed, {
         'stylua', -- Used to format Lua code
+        'prettier',
+        'eslint_d',
+        'yapf',
+        'isort',
+        'clang-format',
+        'goimports',
       })
       require('mason-tool-installer').setup { ensure_installed = ensure_installed }
 
@@ -810,12 +816,12 @@ require('lazy').setup({
         css = { 'prettier' },
         less = { 'eslint_d', 'prettier' },
         html = { 'prettier' },
-        python = { 'yapf', 'iort' },
+        python = { 'yapf', 'isort' },
         go = { 'gopls' },
         javascript = { 'eslint_d', 'prettier', stop_after_first = true },
         jsx = { 'eslint_d', 'prettier', stop_after_first = true },
         vue = { 'eslint_d', 'prettier', stop_after_first = true },
-	arduino = { "clang-format" },
+        arduino = { 'clang-format' },
         -- Conform can also run multiple formatters sequentially
         -- python = { "isort", "black" },
         --
@@ -898,8 +904,8 @@ require('lazy').setup({
       completion = {
         accept = {
           auto_brackets = {
-            enabled = false  -- Set to false to disable auto parentheses
-          }
+            enabled = false, -- Set to false to disable auto parentheses
+          },
         },
         -- By default, you may press `<c-space>` to show the documentation.
         -- Optionally, set `auto_show = true` to show the documentation after a delay.
@@ -994,10 +1000,27 @@ require('lazy').setup({
   { -- Highlight, edit, and navigate code
     'nvim-treesitter/nvim-treesitter',
     build = ':TSUpdate',
-    main = 'nvim-treesitter.configs', -- Sets main module to use for opts
+    main = 'nvim-treesitter.config', -- Sets main module to use for opts
     -- [[ Configure Treesitter ]] See `:help nvim-treesitter`
     opts = {
-      ensure_installed = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc' },
+      ensure_installed = {
+        'bash',
+        'c',
+        'diff',
+        'html',
+        'lua',
+        'luadoc',
+        'markdown',
+        'markdown_inline',
+        'query',
+        'vim',
+        'vimdoc',
+        'go',
+        'javascript',
+        'typescript',
+        'css',
+        'python',
+      },
       -- Autoinstall languages that are not installed
       auto_install = true,
       highlight = {
@@ -1065,6 +1088,8 @@ require('lazy').setup({
     },
   },
 })
+
+vim.opt.runtimepath:append(vim.fn.stdpath 'data' .. '/site')
 
 -- The line beneath this is called `modeline`. See `:help modeline`
 -- vim: ts=2 sts=2 sw=2 et
