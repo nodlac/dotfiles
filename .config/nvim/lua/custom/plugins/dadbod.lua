@@ -19,6 +19,7 @@ return {
       vim.g.db_ui_default_query = 'SELECT * from "{table}" LIMIT 500;'
       vim.g.db_ui_show_help = 0
       vim.g.db_ui_use_nerd_fonts = 1
+      vim.g.db_adapter_postgres_params = { '--set', 'statement_timeout=300000' }  -- 5min timeout
     end,
     config = function()
       vim.keymap.set('n', '<leader>r', '<cmd>DBUIToggle<cr>', { desc = 'Toggle DB Sidebar' })
