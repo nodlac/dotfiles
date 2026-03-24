@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""
+logo-variants — Process black logos into compressed black + white variants.
+
+Takes a folder of black logos with transparent backgrounds and produces:
+  - Compressed black originals (lossless PNG optimization)
+  - White versions with transparent backgrounds (also lossless compressed)
+
+Usage:
+    logo-variants <input_folder> [output_folder]
+
+If output_folder is omitted, creates <input_folder>_processed/
+"""
+
+import sys
+import os
+from pathlib import Path
+from PIL import Image, PngImagePlugin
+
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
+
+
+def compress_png(img: Image.Image) -> PngImagePlugin.PngInfo:
+    """Return save kwargs for maximum lossless PNG compression."""
+    return {
+        "optimize": True,
+        "compress_level": 9,
+    }
+
+
+def make_white_variant(img: Image.Image) -> Image.Image:
+    """Convert all non-transparent pixels to white, preserving alpha."""
+    img = img.convert("RGBA")
+    if HAS_NUMPY:
+        arr = np.array(img)
+        mask = arr[:, :, 3] > 0
+        arr[mask, 0:3] = 255
+        return Image.fromarray(arr)
+    else:
+        pixels = img.load()
+        w, h = img.size
+        for y in range(h):
+            for x in range(w):
+                r, g, b, a = pixels[x, y]
+                if a > 0:
+                    pixels[x, y] = (255, 255, 255, a)
+        return img
+
+
+def process_folder(input_dir: Path, output_dir: Path) -> None:
+    black_dir = output_dir / "black"
+    white_dir = output_dir / "white"
+    black_dir.mkdir(parents=True, exist_ok=True)
+    white_dir.mkdir(parents=True, exist_ok=True)
+
+    extensions = {".png", ".webp", ".tiff", ".tif", ".bmp"}
+    files = sorted(
+        f for f in input_dir.iterdir()
+        if f.is_file() and f.suffix.lower() in extensions
+    )
+
+    if not files:
+        print(f"No image files found in {input_dir}")
+        sys.exit(1)
+
+    print(f"Processing {len(files)} image(s)...\n")
+
+    for filepath in files:
+        name = filepath.stem + ".png"
+        print(f"  {filepath.name}")
+
+        img = Image.open(filepath).convert("RGBA")
+
+        # Save compressed black variant
+        black_path = black_dir / name
+        img.save(black_path, "PNG", **compress_png(img))
+
+        # Create and save white variant
+        white_img = make_white_variant(img)
+        white_path = white_dir / name
+        white_img.save(white_path, "PNG", **compress_png(white_img))
+
+        orig_kb = filepath.stat().st_size / 1024
+        black_kb = black_path.stat().st_size / 1024
+        white_kb = white_path.stat().st_size / 1024
+        print(f"    original: {orig_kb:.1f} KB  →  black: {black_kb:.1f} KB  |  white: {white_kb:.1f} KB")
+
+    print(f"\nDone. Output in {output_dir}/")
+    print(f"  black/ — compressed originals")
+    print(f"  white/ — white variants with transparent backgrounds")
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print(__doc__.strip())
+        sys.exit(0)
+
+    input_dir = Path(sys.argv[1]).resolve()
+    if not input_dir.is_dir():
+        print(f"Error: {input_dir} is not a directory")
+        sys.exit(1)
+
+    if len(sys.argv) >= 3:
+        output_dir = Path(sys.argv[2]).resolve()
+    else:
+        output_dir = input_dir.parent / (input_dir.name + "_processed")
+
+    process_folder(input_dir, output_dir)
+
+
+if __name__ == "__main__":
+    main()
