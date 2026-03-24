@@ -10,6 +10,8 @@ return {
       vim.g.dbs = {
         { name = 'bim_prod', url = os.getenv 'BIM_URL' },
         { name = 'finn_prod', url = os.getenv 'FINN_URL' },
+        { name = 'bim_stag', url = os.getenv 'BIM_STAGING_URL' },
+        { name = 'finn_stag', url = os.getenv 'FINN_STAGING_URL' },
       }
 
       vim.g.db_ui_save_location = vim.fn.expand '~/Scripts'
