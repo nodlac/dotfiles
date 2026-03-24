@@ -10,6 +10,7 @@ export PATH="$HOME/.local/bin:$PATH"
 export PATH="/opt/homebrew/opt/libpq/bin:$PATH"
 export PATH="$PATH:$(go env GOPATH)/bin"
 export PATH="$HOME/.opencode/bin:$PATH"
+export PATH="$HOME/tools:$PATH"
 
 # Loads Environment variables
 [ -f ~/.env ] && source ~/.env
@@ -38,9 +39,6 @@ alias tmux='tmux new-session -A -s settings'
 # ===========================================
 # Functions
 # ===========================================
-sync-notes() {
-    ~/work_scripts/sync-notes.sh
-}
 
 # ===========================================
 # Prompt
