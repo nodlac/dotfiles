@@ -23,6 +23,8 @@ return {
     config = function()
       vim.keymap.set('n', '<leader>r', '<cmd>DBUIToggle<cr>', { desc = 'Toggle DB Sidebar' })
       vim.keymap.set('n', '<leader><CR>', 'vip:DB<cr>', { desc = 'Run SQL block' })
+      vim.keymap.set('n', '<S-CR>', 'vip:DB<cr>', { desc = 'Run SQL block' })
+      vim.keymap.set('i', '<S-CR>', '<Esc>vip:DB<cr>', { desc = 'Run SQL block' })
 
       -- Insert template into new DBUI query buffers
       -- DBUI buffers have no .sql extension, so match on FileType instead
@@ -34,7 +36,6 @@ return {
               '-- Date: ' .. os.date '%Y-%m-%d',
               '',
               'SELECT ',
-              '',
               'LIMIT 500;',
             }
             vim.api.nvim_buf_set_lines(0, 0, -1, false, template)
