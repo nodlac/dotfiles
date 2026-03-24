@@ -753,13 +753,14 @@ require('lazy').setup({
       -- for you, so that they are available from within Neovim.
       local ensure_installed = vim.tbl_keys(servers or {})
       vim.list_extend(ensure_installed, {
-        'stylua', -- Used to format Lua code
+        'stylua',
         'prettier',
         'eslint_d',
         'yapf',
         'isort',
         'clang-format',
         'goimports',
+        'marksman',
       })
       require('mason-tool-installer').setup { ensure_installed = ensure_installed }
 
@@ -777,6 +778,15 @@ require('lazy').setup({
           end,
         },
       }
+
+      -- sourcekit-lsp ships with Xcode, not managed by Mason
+      vim.lsp.config('sourcekit', {
+        cmd = { 'sourcekit-lsp' },
+        filetypes = { 'swift', 'objc', 'objcpp' },
+        root_markers = { 'Package.swift', '.git' },
+        capabilities = capabilities,
+      })
+      vim.lsp.enable('sourcekit')
     end,
   },
 
@@ -913,9 +923,10 @@ require('lazy').setup({
       },
 
       sources = {
-        default = { 'lsp', 'path', 'snippets', 'lazydev' },
+        default = { 'lsp', 'path', 'snippets', 'lazydev', 'dadbod' },
         providers = {
           lazydev = { module = 'lazydev.integrations.blink', score_offset = 100 },
+          dadbod = { name = 'Dadbod', module = 'vim_dadbod_completion.blink' },
         },
       },
 
@@ -1020,6 +1031,7 @@ require('lazy').setup({
         'typescript',
         'css',
         'python',
+        'swift',
       },
       -- Autoinstall languages that are not installed
       auto_install = true,

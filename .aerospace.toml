@@ -86,6 +86,7 @@ on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
     alt-c = ['workspace 2', 'exec-and-forget sleep 0.1 && tmux switch-client -t v-control-center']
     alt-n = ['workspace 2', 'exec-and-forget sleep 0.1 && tmux switch-client -t notes']
     alt-t = ['workspace 2', 'exec-and-forget sleep 0.1 && tmux switch-client -t therapy-notes']
+    alt-d = ['workspace 2', 'exec-and-forget sleep 0.1 && tmux switch-client -t v-psql']
 
     alt-shift-c = 'reload-config'
 
