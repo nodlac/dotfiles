@@ -30,6 +30,7 @@ alias python='python3'
 alias ls='ls --color=auto'
 alias grep='grep --color=auto'
 alias df='git --git-dir=$HOME/.dotfiles/ --work-tree=$HOME'
+alias df-quick-commit='df add -u && df commit -m "quick commit" && df push'
 alias git diff="git diff --color-words"
 alias tmux='tmux new-session -A -s settings'
 
