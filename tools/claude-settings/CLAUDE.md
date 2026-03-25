@@ -18,10 +18,10 @@
 When you **finish**, get **blocked**, or are **ready for review**, run:
 
 ```
-~/work_scripts/agent-update done    "brief summary of what you accomplished"
-~/work_scripts/agent-update review  "stuck on X / ready for review of Y"
-~/work_scripts/agent-update testing "what needs to be tested and how"
-~/work_scripts/agent-update blocked "what external thing is preventing progress"
+~/tools/agent-update done    "brief summary of what you accomplished"
+~/tools/agent-update review  "stuck on X / ready for review of Y"
+~/tools/agent-update testing "what needs to be tested and how"
+~/tools/agent-update blocked "what external thing is preventing progress"
 ```
 
 This auto-detects your tmux session name and updates both `agents.csv` and `agent-log.md`.

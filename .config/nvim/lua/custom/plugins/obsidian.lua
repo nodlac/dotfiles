@@ -16,6 +16,9 @@ return {
     'nvim-lua/plenary.nvim',
   },
   opts = {
+    follow_url_func = function(url)
+      vim.fn.jobstart({ 'open', '-a', 'Google Chrome', url })
+    end,
     ui = {
       enable = false,
     },

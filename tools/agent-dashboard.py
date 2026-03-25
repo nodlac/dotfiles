@@ -472,7 +472,7 @@ class Dashboard:
 
             elif key in (ord('n'), ord('N')):
                 curses.endwin()
-                os.system("zsh -c 'bindkey -e; source ~/work_scripts/agent-tools.sh && agent-start'")
+                os.system("zsh -c 'bindkey -e; source ~/tools/agent-tools.sh && agent-start'")
                 os.system("stty sane")
                 self.stdscr = curses.initscr()
                 self._init_curses()

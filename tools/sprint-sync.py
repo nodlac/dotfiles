@@ -32,7 +32,7 @@ MARKER_TO_STATUS = {
     "[>]": "qa",
     "[T]": "qa",           # testing required — maps to qa in ClickUp
     "[x]": "done",
-    "[c]": "done",         # closed — marks done in ClickUp and moves to Done section
+    "[c]": "closed (caution!)",  # closed in ClickUp and moves to Done section locally
     "[a]": "in progress",  # agent running counts as in progress in ClickUp
     "[d]": "__delete__",   # delete from ClickUp and remove line
 }
@@ -422,7 +422,12 @@ def sync_push(local_tasks, clickup_tasks):
         if tech_num not in cu_lookup:
             fetched = get_task_by_tech_num(tech_num)
             if not fetched:
-                print(f"  SKIP TECH-{tech_num}: not found in ClickUp")
+                if target_status in ("done", "closed (caution!)"):
+                    # Task removed from ClickUp but marked done/closed locally — just count it
+                    print(f"  TECH-{tech_num}: not in ClickUp, treating as done")
+                    done_tech_ids.append(f"TECH-{tech_num}")
+                else:
+                    print(f"  SKIP TECH-{tech_num}: not found in ClickUp")
                 continue
             cu_lookup[tech_num] = fetched
 
@@ -440,7 +445,7 @@ def sync_push(local_tasks, clickup_tasks):
             if result:
                 print(f"  TECH-{tech_num}: {cu_status} -> {target_status}")
                 pushed += 1
-                if target_status == "done":
+                if target_status in ("done", "closed (caution!)"):
                     done_tech_ids.append(f"TECH-{tech_num}")
 
     if pushed == 0:

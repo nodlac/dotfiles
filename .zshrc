@@ -10,7 +10,6 @@ export PATH="$HOME/.local/bin:$PATH"
 export PATH="/opt/homebrew/opt/libpq/bin:$PATH"
 export PATH="$PATH:$(go env GOPATH)/bin"
 export PATH="$HOME/.opencode/bin:$PATH"
-export PATH="$HOME/tools:$PATH"
 
 # Loads Environment variables
 [ -f ~/.env ] && source ~/.env
@@ -39,6 +38,45 @@ alias tmux='tmux new-session -A -s settings'
 # ===========================================
 # Functions
 # ===========================================
+
+# Run a .sql file and save results as CSV to ~/Downloads
+# Usage: sqlrun <db> <file.sql>
+#   db: bim, finn, bim_stag, finn_stag
+sqlrun() {
+    local db="$1" file="$2"
+    if [[ -z "$db" || -z "$file" ]]; then
+        echo "Usage: sqlrun <db> <file.sql>"
+        echo "  db: bim, finn, bim_stag, finn_stag"
+        return 1
+    fi
+    if [[ ! -f "$file" ]]; then
+        echo "File not found: $file"
+        return 1
+    fi
+
+    local url
+    case "$db" in
+        bim)       url="$BIM_URL" ;;
+        finn)      url="$FINN_URL" ;;
+        bim_stag)  url="$BIM_STAGING_URL" ;;
+        finn_stag) url="$FINN_STAGING_URL" ;;
+        *) echo "Unknown db: $db (use bim, finn, bim_stag, finn_stag)"; return 1 ;;
+    esac
+    if [[ -z "$url" ]]; then
+        echo "DB URL not set for $db"
+        return 1
+    fi
+
+    # Ensure tunnel is open before running query
+    ~/tools/ensure-tunnel "$db" || return 1
+
+    local name="${file:t:r}"  # filename without path or extension
+    local date="$(date +%Y-%m-%d)"
+    local out="$HOME/Downloads/${name}_${date}.csv"
+
+    echo "Running $file against $db → $out"
+    psql "$url" --csv -f "$file" -o "$out" && echo "Saved: $out"
+}
 
 # ===========================================
 # Prompt

@@ -38,3 +38,7 @@ vim.fn.matchadd('CbDefer',     '\\[d\\].\\{-}\\zsTECH-\\d\\+', 21)
 
 -- Date stamps YYYY-MM-DD
 vim.fn.matchadd('Number', '\\d\\{4}-\\d\\{2}-\\d\\{2}', 20)
+
+-- Purple markdown links [text](url)
+vim.api.nvim_set_hl(0, 'MarkdownLink', { fg = '#c792ea' })
+vim.fn.matchadd('MarkdownLink', '\\[.\\{-}\\]([^)]*)', 20)

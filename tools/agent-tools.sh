@@ -1044,27 +1044,27 @@ print(m.group(1) if m else '')
 # --- agent-dashboard ---
 # Interactive terminal dashboard: list agents, preview pane output, quick actions
 agent-dashboard() {
-    python3 ~/work_scripts/agent-dashboard.py "$@"
+    python3 ~/tools/agent-dashboard.py "$@"
 }
 
 # --- sprint-sync ---
 # Two-way sync between sprint markdown and ClickUp
 # Usage: sprint-sync [--dry-run] [sprint_num]
 sprint-sync() {
-    python3 ~/work_scripts/sprint-sync.py "$@"
+    python3 ~/tools/sprint-sync.py "$@"
 }
 
 # --- sprint-rollover ---
 # Pull uncompleted tasks from previous sprint to current
 # Usage: sprint-rollover [--dry-run] [from_num] [to_num]
 sprint-rollover() {
-    python3 ~/work_scripts/sprint-sync.py rollover "$@"
+    python3 ~/tools/sprint-sync.py rollover "$@"
 }
 
 # --- sprint-new ---
 # Create a new sprint file linked to ClickUp, rollover + sync
 sprint-new() {
-    python3 ~/work_scripts/sprint-sync.py new "$@"
+    python3 ~/tools/sprint-sync.py new "$@"
 }
 
 # --- Zsh completions ---

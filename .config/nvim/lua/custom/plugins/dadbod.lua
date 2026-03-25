@@ -14,88 +14,24 @@ return {
         { name = 'finn_stag', url = os.getenv 'FINN_STAGING_URL' },
       }
 
-      vim.g.db_ui_save_location = vim.fn.expand '~/Scripts'
-      vim.g.db_ui_tmp_query_location = vim.fn.expand '~/Scripts/queries'
+      vim.g.db_ui_save_location = vim.fn.expand '~/scripts'
+      vim.g.db_ui_tmp_query_location = vim.fn.expand '~/scripts/queries'
       vim.g.db_ui_default_query = 'SELECT * from "{table}" LIMIT 500;'
       vim.g.db_ui_show_help = 0
       vim.g.db_ui_use_nerd_fonts = 1
       vim.g.db_adapter_postgres_params = { '--set', 'statement_timeout=300000' }  -- 5min timeout
+
     end,
     config = function()
-      local log_path = vim.fn.expand '~/dadbod-debug.log'
-      local function dblog(msg)
-        local f = io.open(log_path, 'a')
-        if f then
-          f:write(os.date '%Y-%m-%d %H:%M:%S' .. ' | ' .. msg .. '\n')
-          f:close()
-        end
-      end
-
-      -- SSH tunnel config: db name -> { port, evaql_domain, evaql_env }
-      local tunnels = {
-        bim_prod  = { port = 24601, domain = 'bim',      env = 'production' },
-        bim_stag  = { port = 24602, domain = 'bim',      env = 'staging' },
-        finn_prod = { port = 24603, domain = 'finnegan',  env = 'production' },
-        finn_stag = { port = 24604, domain = 'finnegan',  env = 'staging' },
-      }
-
-      local tunnel_session = 'tunnels'
+      -- DB names used in DBUI drawer (maps to ensure-tunnel script names)
+      local db_names = { 'bim_prod', 'bim_stag', 'finn_prod', 'finn_stag' }
 
       local function ensure_tunnel(db_name)
-        local t = tunnels[db_name]
-        if not t then
-          dblog('no tunnel config for: ' .. tostring(db_name))
-          return
+        vim.notify('Checking SSH tunnel for ' .. db_name .. '...', vim.log.levels.INFO)
+        local result = vim.fn.system(vim.fn.expand('~/tools/ensure-tunnel') .. ' ' .. db_name)
+        if vim.v.shell_error ~= 0 then
+          vim.notify('Tunnel failed for ' .. db_name .. ': ' .. result, vim.log.levels.ERROR)
         end
-        -- Check if port is already listening
-        local check = vim.fn.system('lsof -iTCP:' .. t.port .. ' -sTCP:LISTEN -t 2>/dev/null')
-        if check ~= '' then
-          dblog('tunnel already open for ' .. db_name .. ' on port ' .. t.port)
-          return
-        end
-        -- Kill any dead pane for this db before opening a new one
-        local has_session = vim.fn.system('tmux has-session -t ' .. tunnel_session .. ' 2>/dev/null; echo $?'):gsub('%s+', '')
-        if has_session == '0' then
-          -- Find and kill panes whose title or command contains this db's evaql args
-          local panes = vim.fn.system(string.format(
-            "tmux list-panes -t %s -F '#{pane_id} #{pane_current_command}' 2>/dev/null",
-            tunnel_session
-          ))
-          for pane_id, cmd_name in panes:gmatch('(%%%d+) (%S+)') do
-            -- Kill panes that are sitting at a shell (tunnel died) or waiting on read
-            if cmd_name == 'zsh' or cmd_name == 'bash' or cmd_name == 'read' then
-              vim.fn.system('tmux kill-pane -t ' .. pane_id .. ' 2>/dev/null')
-            end
-          end
-          -- Re-check if session still exists after cleanup
-          has_session = vim.fn.system('tmux has-session -t ' .. tunnel_session .. ' 2>/dev/null; echo $?'):gsub('%s+', '')
-        end
-
-        local cmd = string.format('evaql %s %s; echo "Tunnel closed. Press enter to exit."; read', t.domain, t.env)
-        if has_session ~= '0' then
-          vim.fn.system(string.format(
-            "tmux new-session -d -s %s -n tunnels '%s'",
-            tunnel_session, cmd
-          ))
-        else
-          vim.fn.system(string.format(
-            "tmux split-window -t %s -h '%s'",
-            tunnel_session, cmd
-          ))
-        end
-        vim.notify('Opening SSH tunnel for ' .. db_name .. '...', vim.log.levels.INFO)
-        dblog('opening tunnel for ' .. db_name)
-        -- Poll until port is listening (up to 30s)
-        for _ = 1, 30 do
-          vim.fn.system('sleep 1')
-          local up = vim.fn.system('lsof -iTCP:' .. t.port .. ' -sTCP:LISTEN -t 2>/dev/null')
-          if up ~= '' then
-            dblog('tunnel open for ' .. db_name)
-            return
-          end
-        end
-        dblog('tunnel timeout for ' .. db_name)
-        vim.notify('Tunnel for ' .. db_name .. ' failed to open after 30s', vim.log.levels.ERROR)
       end
 
       -- Remap <CR> in DBUI drawer to check tunnel before expanding
@@ -104,11 +40,8 @@ return {
         callback = function()
           vim.keymap.set('n', '<CR>', function()
             local line = vim.fn.getline('.')
-            dblog('drawer CR pressed, line: ' .. line)
-            -- Extract db name from drawer line (strip icons/whitespace)
-            for name, _ in pairs(tunnels) do
+            for _, name in ipairs(db_names) do
               if line:find(name, 1, true) then
-                dblog('matched db: ' .. name)
                 ensure_tunnel(name)
                 break
               end
