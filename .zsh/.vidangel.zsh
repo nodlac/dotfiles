@@ -12,103 +12,148 @@ connect-lepotato() {
      ssh -i ~/.ssh/lepotato -p 83 ubuntu@136.38.39.34
 }
 
-# variable contains commands to refresh the vidangel db
-vidangel-restore-dev-dump() {
-    DUMP_FILE=~/Downloads/dev.dump
-
-    if [ ! -f "$DUMP_FILE" ]; then
-      echo "Error: dump file not found at $DUMP_FILE"
-      return 1 2>/dev/null || exit 1
+##########################################################
+# Internal helpers (idempotent building blocks)
+##########################################################
+_va_ensure_colima() {
+    if colima status &>/dev/null; then
+        echo "  Colima already running"
+    else
+        echo "  Starting Colima..."
+        colima start
     fi
-    psql -h localhost -p 5432 -U root -d postgres -c "CREATE ROLE pgadmin WITH SUPERUSER LOGIN PASSWORD 'dev';"
-    psql -h localhost -p 5432 -U root -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'vidangel';"
-    psql -h localhost -p 5432 -U root -d postgres -c 'DROP DATABASE vidangel;'
-    pg_restore -h localhost -p 5432 -U pgadmin -x -C -d postgres $DUMP_FILE
-    vidangel-reset-server
 }
 
-vidangel-setup-backend() {
-    colima restart
+_va_ensure_repo() {
     cd ~/vidangel-repo/vidangel-backend
     git pull
-    uv sync
-    source ~/vidangel-repo/vidangel-backend/.venv/bin/activate
-    valut-refresh-token
-    w2 ~/vidangel-repo/vidangel-backend/.templates/dev.env.hbs > .env
+    uv sync --all-groups
+    source .venv/bin/activate
+}
 
-    # Start PostgreSQL (if not already running)
-    if ! docker ps | grep -q vidangel-postgres; then
-        if docker ps -a | grep -q vidangel-postgres; then
-            echo "  Starting existing vidangel-postgres container..."
-            docker start vidangel-postgres
-        else
-            echo "  Creating vidangel-postgres container..."
-            docker run --name=vidangel-postgres \
-              -d \
-              -e POSTGRES_USER=root \
-              -e POSTGRES_PASSWORD=dev \
-              -e POSTGRES_DATABASE=vidangel \
-              -e POSTGRES_HOST_AUTH_METHOD=trust \
-              -v vidangel-postgres-data:/var/lib/postgresql/data \
-              -p 5432:5432 \
-              --restart=always \
-              postgres:17
-        fi
+_va_ensure_env() {
+    cd ~/vidangel-repo/vidangel-backend
+    vault-refresh-token
+    w2 .templates/dev.env.hbs > .env
+}
+
+_va_ensure_container() {
+    local name=$1; shift
+    local image=$1; shift
+
+    if docker ps --format '{{.Names}}' | grep -qx "$name"; then
+        echo "  $name already running"
+    elif docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
+        echo "  Starting existing $name..."
+        docker start "$name"
     else
-        echo "  vidangel-postgres already running"
+        echo "  Creating $name..."
+        docker run --name="$name" -d --restart=always "$@" "$image"
     fi
-    
-    # Start Redis (if not already running)
-    if ! docker ps | grep -q vidangel-redis; then
-        if docker ps -a | grep -q vidangel-redis; then
-            echo "  Starting existing vidangel-redis container..."
-            docker start vidangel-redis
-        else
-            echo "  Creating vidangel-redis container..."
-            docker run --name=vidangel-redis \
-              -d \
-              -p 6379:6379 \
-              --restart=always \
-              redis:6-bullseye
+}
+
+_va_ensure_containers() {
+    _va_ensure_container vidangel-postgres postgres:17 \
+        -e POSTGRES_USER=root \
+        -e POSTGRES_PASSWORD=dev \
+        -e POSTGRES_DB=vidangel \
+        -e POSTGRES_HOST_AUTH_METHOD=trust \
+        -v vidangel-postgres-data:/var/lib/postgresql/data \
+        -p 5432:5432
+
+    _va_ensure_container vidangel-redis redis:6-bullseye \
+        -p 6379:6379
+
+    _va_ensure_container typesense typesense/typesense:29.0 \
+        -p 8108:8108 \
+        -v /opt/docker/typesense:/data \
+        -e TYPESENSE_DATA_DIR=/data \
+        -e TYPESENSE_API_KEY=testing000
+}
+
+_va_wait_for_postgres() {
+    echo "  Waiting for Postgres..."
+    local retries=10
+    while ! psql -h localhost -p 5432 -U root -d postgres -c "SELECT 1" &>/dev/null; do
+        ((retries--)) || { echo "  FAIL: Postgres did not become ready"; return 1; }
+        sleep 1
+    done
+    echo "  Postgres ready"
+}
+
+_va_ensure_db_data() {
+    local row_count
+    row_count=$(psql -h localhost -p 5432 -U root -d vidangel -tAc "SELECT count(*) FROM product_subscription" 2>/dev/null)
+
+    if [[ -n "$row_count" && "$row_count" -gt 0 ]]; then
+        echo "  Database has data ($row_count subscriptions)"
+        return 0
+    fi
+
+    echo ""
+    echo "  Database is empty or does not exist."
+
+    # Check for cached dump first, then Downloads
+    local cache_dir=~/.cache/vidangel
+    if [[ -f "$cache_dir/dev.dump" ]]; then
+        echo "  Found cached dump at $cache_dir/dev.dump"
+        echo -n "  Restore from cache? [Y/n] "
+        read -r answer
+        if [[ ! "$answer" =~ ^[Nn] ]]; then
+            vidangel-restore-dev-dump
+            return $?
         fi
-    else
-        echo "  vidangel-redis already running"
-    fi
-    
-    # Start Typesense (if not already running)
-    if ! docker ps | grep -q typesense; then
-        if docker ps -a | grep -q typesense; then
-            echo "  Starting existing typesense container..."
-            docker start typesense
-        else
-            echo "  Creating typesense container..."
-            docker run --name typesense \
-              -d \
-              -p 8108:8108 \
-              -v /opt/docker/typesense:/data \
-              -e TYPESENSE_DATA_DIR=/data \
-              -e TYPESENSE_API_KEY=testing000 \
-              --restart=always \
-              typesense/typesense:29.0
+    elif [[ -f ~/Downloads/dev.dump ]]; then
+        echo "  Found dump at ~/Downloads/dev.dump"
+        echo -n "  Restore from Downloads? [Y/n] "
+        read -r answer
+        if [[ ! "$answer" =~ ^[Nn] ]]; then
+            vidangel-restore-dev-dump
+            return $?
         fi
-    else
-        echo "  typesense already running"
     fi
-    # Check if DB has data before running reset-server
-    sleep 2  # give postgres a moment to accept connections
-    local row_count=$(psql -h localhost -p 5432 -U root -d vidangel -tAc "SELECT count(*) FROM product_subscription" 2>/dev/null)
-    if [[ -z "$row_count" || "$row_count" -eq 0 ]]; then
-        echo ""
-        echo "⚠️  Database is empty. Run 'vidangel-restore-dev-dump' first, which will call reset-server automatically."
-        return 1
-    fi
-    vidangel-reset-server
+
+    echo "  Skipping restore. Download dev.dump and run 'vidangel-restore-dev-dump' when ready."
+    return 1
+}
+
+##########################################################
+# Public functions
+##########################################################
+
+# Zero to working in one command
+vidangel-start-backend() {
+    echo "=== VidAngel Backend Setup ==="
+    echo ""
+
+    echo "[1/7] Colima"
+    _va_ensure_colima || return 1
+
+    echo "[2/7] Repository & dependencies"
+    _va_ensure_repo || return 1
+
+    echo "[3/7] Environment"
+    _va_ensure_env || return 1
+
+    echo "[4/7] Docker containers"
+    _va_ensure_containers || return 1
+
+    echo "[5/7] Postgres readiness"
+    _va_wait_for_postgres || return 1
+
+    echo "[6/7] Database data"
+    _va_ensure_db_data || return 1
+
+    echo "[7/7] Migrations & search index"
+    vidangel-reset-server || return 1
+
+    echo ""
+    echo "=== Running preflight checks ==="
+    vidangel-preflight
 }
 
 vidangel-reset-server() {
-    cd ~/vidangel-repo/vidangel-backend/
-    source .venv/bin/activate
-    uv sync --all-groups
+    _va_ensure_repo
 
     python3 manage.py makemigrations
     python3 manage.py migrate
@@ -117,15 +162,123 @@ vidangel-reset-server() {
     # This destroys the current search index and rebuilds from scratch.
     #  It doesn't take too long and helps prevent out of sync issues with the index.
     python3 manage.py update_search
-    # Update the Offerings View which will create a modified_at history 
+    # Update the Offerings View which will create a modified_at history
     #  in Redis for incremental search updates.
     python3 manage.py offerings_materialized_view -r
     python3 manage.py offerings_materialized_view -c
-    # # Run the "test suite" of canned searches.
-    # python manage.py score_search_test
+}
+
+vidangel-restore-dev-dump() {
+    local cache_dir=~/.cache/vidangel
+    local DUMP_FILE=""
+
+    # Prefer fresh download, fall back to cache
+    if [[ -f ~/Downloads/dev.dump ]]; then
+        DUMP_FILE=~/Downloads/dev.dump
+    elif [[ -f "$cache_dir/dev.dump" ]]; then
+        echo "No fresh dump in ~/Downloads, using cached version."
+        DUMP_FILE="$cache_dir/dev.dump"
+    else
+        echo "Error: No dump file found. Download dev.dump to ~/Downloads first."
+        return 1
+    fi
+
+    _va_wait_for_postgres || return 1
+
+    psql -h localhost -p 5432 -U root -d postgres -c "CREATE ROLE pgadmin WITH SUPERUSER LOGIN PASSWORD 'dev';" 2>/dev/null
+    psql -h localhost -p 5432 -U root -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'vidangel';"
+    psql -h localhost -p 5432 -U root -d postgres -c 'DROP DATABASE IF EXISTS vidangel;'
+    pg_restore -h localhost -p 5432 -U pgadmin -x -C -d postgres "$DUMP_FILE"
+
+    # Cache the dump for future restores and clean up Downloads
+    if [[ "$DUMP_FILE" == */Downloads/* ]]; then
+        mkdir -p "$cache_dir"
+        mv "$DUMP_FILE" "$cache_dir/dev.dump"
+        echo "Dump cached at $cache_dir/dev.dump (removed from Downloads)"
+    fi
+
+    vidangel-reset-server
+}
+
+vidangel-preflight() {
+    local pass=0
+    local fail=0
+    local warn=0
+
+    _check() {
+        if eval "$2" >/dev/null 2>&1; then
+            echo "  PASS  $1"
+            ((pass++))
+        else
+            echo "  FAIL  $1"
+            ((fail++))
+        fi
+    }
+
+    _warn() {
+        if ! eval "$2" >/dev/null 2>&1; then
+            echo "  WARN  $1"
+            ((warn++))
+        fi
+    }
+
+    echo "=== VidAngel Backend Preflight ==="
+    echo ""
+
+    # Docker / Colima
+    _check "Colima running" "colima status"
+    _check "vidangel-postgres running" "docker ps --format '{{.Names}}' | grep -qx vidangel-postgres"
+    _check "vidangel-redis running" "docker ps --format '{{.Names}}' | grep -qx vidangel-redis"
+    _check "typesense running" "docker ps --format '{{.Names}}' | grep -qx typesense"
+
+    # Postgres connectivity + data
+    _check "Postgres accepts connections" "psql -h localhost -p 5432 -U root -d vidangel -c 'SELECT 1'"
+    local row_count=$(psql -h localhost -p 5432 -U root -d vidangel -tAc "SELECT count(*) FROM product_subscription" 2>/dev/null)
+    if [[ -n "$row_count" && "$row_count" -gt 0 ]]; then
+        echo "  PASS  Database has data ($row_count subscriptions)"
+        ((pass++))
+    else
+        echo "  FAIL  Database is empty — run 'vidangel-restore-dev-dump'"
+        ((fail++))
+    fi
+
+    # Migrations
+    local unapplied=$(cd ~/vidangel-repo/vidangel-backend && source .venv/bin/activate && python3 manage.py showmigrations 2>/dev/null | grep '\[ \]' | wc -l | tr -d ' ')
+    if [[ "$unapplied" -eq 0 ]]; then
+        echo "  PASS  All migrations applied"
+        ((pass++))
+    else
+        echo "  FAIL  $unapplied unapplied migration(s) — run 'python3 manage.py migrate'"
+        ((fail++))
+    fi
+
+    # Redis
+    _check "Redis responds to ping" "redis-cli -h localhost -p 6379 ping | grep -q PONG"
+
+    # Typesense
+    _check "Typesense healthy" "curl -sf http://localhost:8108/health -H 'X-TYPESENSE-API-KEY: testing000' | grep -q ok"
+
+    # Vault
+    _warn "Vault token may be expired" "vault token lookup"
+
+    # .env
+    _check ".env file exists" "test -f ~/vidangel-repo/vidangel-backend/.env"
+
+    # venv
+    _check "Virtual env exists" "test -f ~/vidangel-repo/vidangel-backend/.venv/bin/activate"
+
+    echo ""
+    echo "=== Results: $pass passed, $fail failed, $warn warning(s) ==="
+
+    if [[ $fail -gt 0 ]]; then
+        return 1
+    fi
 }
 
 vidangel-run-devserver() {
+    vidangel-preflight || { echo ""; echo "Fix the above failures before starting the server."; return 1; }
+    echo ""
+
     export CELERY_TASK_ALWAYS_EAGER=f
     export DISABLE_FINNEGAN_ANALYTICS=True
     export DISABLE_ITERABLE=True
