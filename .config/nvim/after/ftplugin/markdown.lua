@@ -36,9 +36,10 @@ vim.fn.matchadd('CbAlt',       '\\[a\\].\\{-}\\zsTECH-\\d\\+', 21)
 vim.fn.matchadd('CbCode',      '\\[c\\].\\{-}\\zsTECH-\\d\\+', 21)
 vim.fn.matchadd('CbDefer',     '\\[d\\].\\{-}\\zsTECH-\\d\\+', 21)
 
+-- Purple markdown links [text](https://...)
+vim.api.nvim_set_hl(0, 'MdLink', { fg = '#c792ea' })
+vim.fn.matchadd('MdLink', '\\[[^]]*\\]([^)]*)', 20)
+
 -- Date stamps YYYY-MM-DD
 vim.fn.matchadd('Number', '\\d\\{4}-\\d\\{2}-\\d\\{2}', 20)
 
--- Purple markdown links [text](url)
-vim.api.nvim_set_hl(0, 'MarkdownLink', { fg = '#c792ea' })
-vim.fn.matchadd('MarkdownLink', '\\[.\\{-}\\]([^)]*)', 20)

@@ -41,7 +41,7 @@ C_REVIEW   = 9
 C_TESTING  = 10
 
 STATUS_ORDER  = {'active': 0, 'review': 1, 'testing': 2, 'blocked': 3, 'stale': 4, 'done': 5}
-STATUS_MARKER = {'active': '*', 'review': 'R', 'testing': 'T', 'blocked': '!', 'stale': '?', 'done': 'x'}
+STATUS_MARKER = {'active': '*', 'review': 'R', 'testing': 'T', 'blocked': '!', 'stale': '?', 'done': 'd'}
 COLOR_MAP = None  # initialized after curses.start_color()
 
 

@@ -1,9 +1,13 @@
 # Global Rules
 
+## Commits
+- Do NOT add "Co-Authored-By" lines to commit messages.
+
 ## Security
 - NEVER ask the user to paste tokens, passwords, API keys, or any secrets into the chat.
 - NEVER save or log secrets in any file that is tracked by git or visible in conversation history.
 - Access credentials only through environment variables (e.g. `$CLICKUP_TOKEN`). If a credential is missing, tell the user which env var to set in `~/.env` and have them do it themselves.
+- Do NOT use the Anthropic API key (`$ANTHROPIC_API_KEY`) for any purpose unless the user explicitly asks you to. This includes making API calls, building test scripts, or any other use.
 
 # Agent Instructions
 
@@ -12,6 +16,10 @@
 - **Agent tracker**: `~/notes/work_notes/sprints/agents.csv` — your row is identified by your tmux session name
 - **Agent log**: `~/notes/work_notes/sprints/agent-log.md` — append progress notes here any time
 - **Current sprint**: the highest-numbered file matching `~/notes/work_notes/sprints/sprint_*.md` — read this for task context, acceptance criteria, and related work
+
+## Session tracking
+
+At the start of a new conversation, check if the current tmux session is already tracked in `~/notes/work_notes/sprints/agents.csv`. If it is not tracked, ask the user if they'd like to track it before proceeding with the task.
 
 ## Check-in protocol
 

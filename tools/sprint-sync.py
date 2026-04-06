@@ -1123,9 +1123,8 @@ tags:
   - sprints
 clickup_list_id: "{list_id}"
 ---
-
-# Legend
-<!-- [ ] todo  [/] in progress  [a] agent  [~] blocked/waiting  [>] qa  [!] urgent  [x] done  [d] delete -->
+<!-- [ ] todo  [/] in progress  [a] agent  [~] blocked/waiting  [>] qa  [!] urgent  [x] done  [d] delete
+NEW create  PENDING:<id> awaiting custom ID -->
 
 # Uncategorized Tasks
 

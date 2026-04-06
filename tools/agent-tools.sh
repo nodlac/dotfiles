@@ -1,5 +1,7 @@
 #!/usr/bin/env zsh
 
+[[ -f ~/.env ]] && source ~/.env
+
 AGENT_FILE="$HOME/notes/work_notes/sprints/agents.csv"
 AGENT_LOG="$HOME/notes/work_notes/sprints/agent-log.md"
 CLICKUP_BASE="https://app.clickup.com/t/${CLICKUP_TEAM_ID:-14252037}"
@@ -132,16 +134,6 @@ agent-start() {
         g) agent_type="general" ;;
     esac
 
-    # Session name (short, first — it's what you'll see in tmux)
-    printf "Session name (short, e.g. claude-usage-recap): "
-    read -r session_slug
-    if [[ -z "$session_slug" ]]; then
-        echo "Session name is required."
-        return 1
-    fi
-    session_slug=$(_sanitize_session "$session_slug")
-    local session_name="zz-${session_slug}"
-
     # Task ID — loop until confirmed or skipped
     local _cu_name_for_desc=""
     while true; do
@@ -162,8 +154,8 @@ agent-start() {
         if [[ -n "$CLICKUP_TOKEN" ]]; then
             local cu_json=$(curl -s "https://api.clickup.com/api/v2/task/${task_id}?custom_task_ids=true&team_id=${CLICKUP_TEAM_ID}" \
                 -H "Authorization: $CLICKUP_TOKEN" 2>/dev/null)
-            local cu_name=$(echo "$cu_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('name',''))" 2>/dev/null)
-            local cu_status=$(echo "$cu_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status',{}).get('status',''))" 2>/dev/null)
+            local cu_name=$(printf '%s' "$cu_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('name',''))" 2>/dev/null)
+            local cu_status=$(printf '%s' "$cu_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status',{}).get('status',''))" 2>/dev/null)
 
             if [[ -z "$cu_name" || "$cu_name" == "None" ]]; then
                 echo "  Could not find $task_id in ClickUp. Try again."
@@ -182,6 +174,16 @@ agent-start() {
             break
         fi
     done
+
+    # Session name
+    printf "Session name (short, e.g. claude-usage-recap): "
+    read -r session_slug
+    if [[ -z "$session_slug" ]]; then
+        echo "Session name is required."
+        return 1
+    fi
+    session_slug=$(_sanitize_session "$session_slug")
+    local session_name="zz-${session_slug}"
 
     # Agent prompt (what the agent should work on)
     if [[ -n "$_cu_name_for_desc" ]]; then
@@ -221,7 +223,7 @@ print(m.group(1) if m else '')
                 -H "Content-Type: application/json" \
                 -d "{\"name\": \"${cu_title}\", \"assignees\": [${CLICKUP_USER_ID}], \"status\": \"in progress\"}" 2>/dev/null)
 
-            task_id=$(echo "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('custom_id',''))" 2>/dev/null)
+            task_id=$(printf '%s' "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('custom_id',''))" 2>/dev/null)
 
             if [[ -n "$task_id" && "$task_id" != "None" ]]; then
                 echo "Created $task_id: $cu_title"
@@ -396,7 +398,7 @@ print(m.group(1) if m else '')
     fi
 
     # Check if session already exists
-    if tmux has-session -t "$session_name" 2>/dev/null; then
+    if command tmux has-session -t "$session_name" 2>/dev/null; then
         echo "Session '$session_name' already exists."
         return 1
     fi
@@ -414,7 +416,7 @@ print(m.group(1) if m else '')
     _agent_append_row "active" "$description" "$task_id" "$session_name" "$notes_file" "$today" "$type_label"
 
     # Create tmux session in the working directory
-    tmux new-session -d -s "$session_name" -c "$work_dir"
+    command tmux new-session -d -s "$session_name" -c "$work_dir"
 
     # Build the initial message for claude
     local prompt="You are working on: ${description}"
@@ -423,7 +425,7 @@ print(m.group(1) if m else '')
     prompt="${prompt}\n\nWhen you finish or get blocked, update ~/notes/work_notes/sprints/agents.csv per the instructions in ~/.claude/CLAUDE.md"
 
     # Launch claude code in the session with initial message (interactive mode)
-    tmux send-keys -t "$session_name" "claude \"${prompt}\"" Enter
+    command tmux send-keys -t "$session_name" "claude \"${prompt}\"" Enter
 
     echo ""
     echo "Session '$session_name' created and tracked."
@@ -431,7 +433,7 @@ print(m.group(1) if m else '')
     echo "Dir: $work_dir"
 
     # Switch to the new session
-    tmux switch-client -t "$session_name"
+    command tmux switch-client -t "$session_name"
 }
 
 # --- agent-status ---
@@ -516,7 +518,7 @@ agent-checkin() {
         session=$(echo "$session" | xargs)
         [[ -z "$session" ]] && continue
         # Only include sessions that are live
-        tmux has-session -t "$session" 2>/dev/null || continue
+        command tmux has-session -t "$session" 2>/dev/null || continue
         sessions+=("$session")
         tasks+=("$task")
         clickups+=("$clickup")
@@ -532,7 +534,7 @@ agent-checkin() {
     echo " Commands: [enter] next  [d] done  [b] blocked  [q] quit"
     echo ""
 
-    local current_session=$(tmux display-message -p '#S' 2>/dev/null)
+    local current_session=$(command tmux display-message -p '#S' 2>/dev/null)
 
     for i in {1..${#sessions}}; do
         local sess="${sessions[$i]}"
@@ -552,7 +554,7 @@ agent-checkin() {
             s|S) continue ;;
             *)
                 # Switch to the session
-                tmux switch-client -t "$sess" 2>/dev/null
+                command tmux switch-client -t "$sess" 2>/dev/null
 
                 # Wait for user to come back and say what happened
                 printf " Back? [enter] next  [d] done  [b] blocked: "
@@ -571,7 +573,7 @@ agent-checkin() {
     done
 
     # Switch back to original session
-    [[ -n "$current_session" ]] && tmux switch-client -t "$current_session" 2>/dev/null
+    [[ -n "$current_session" ]] && command tmux switch-client -t "$current_session" 2>/dev/null
 
     echo ""
     echo "Check-in complete."
@@ -600,8 +602,8 @@ agent-done() {
     fi
 
     # Check if session is in a worktree
-    if tmux has-session -t "$session_name" 2>/dev/null; then
-        local pane_path=$(tmux display-message -t "$session_name" -p '#{pane_current_path}' 2>/dev/null)
+    if command tmux has-session -t "$session_name" 2>/dev/null; then
+        local pane_path=$(command tmux display-message -t "$session_name" -p '#{pane_current_path}' 2>/dev/null)
         local is_worktree=false
         local worktree_path=""
         if [[ -n "$pane_path" && -f "$pane_path/.git" ]]; then
@@ -612,7 +614,7 @@ agent-done() {
         printf "Kill tmux session '$session_name'? (y/n): "
         read -r kill_it
         if [[ "$kill_it" == "y" ]]; then
-            tmux kill-session -t "$session_name"
+            command tmux kill-session -t "$session_name"
             echo "Session killed."
 
             if $is_worktree && [[ -n "$worktree_path" ]]; then
@@ -653,7 +655,7 @@ agent-track() {
     fi
 
     # Verify session exists
-    if ! tmux has-session -t "$session_name" 2>/dev/null; then
+    if ! command tmux has-session -t "$session_name" 2>/dev/null; then
         echo "Session '$session_name' not found."
         return 1
     fi
@@ -665,7 +667,7 @@ agent-track() {
     fi
 
     # Auto-detect TECH ID from git branch
-    local pane_path=$(tmux display-message -t "$session_name" -p '#{pane_current_path}' 2>/dev/null)
+    local pane_path=$(command tmux list-panes -t "$session_name" -F '#{pane_current_path}' 2>/dev/null | head -1)
     local auto_tech=""
     if [[ -n "$pane_path" && -d "$pane_path/.git" ]]; then
         local branch=$(git -C "$pane_path" branch --show-current 2>/dev/null)
@@ -697,7 +699,7 @@ agent-track() {
     local tracked_name="$session_name"
     if [[ -n "$rename_to" ]]; then
         rename_to=$(_sanitize_session "$rename_to")
-        tmux rename-session -t "$session_name" "$rename_to"
+        command tmux rename-session -t "$session_name" "$rename_to"
         tracked_name="$rename_to"
         echo "Renamed session to '$rename_to'"
     fi
@@ -738,7 +740,7 @@ with open('$AGENT_FILE') as f:
         $is_tracked && continue
 
         # Get branch info
-        local pane_path=$(tmux display-message -t "$sname" -p '#{pane_current_path}' 2>/dev/null)
+        local pane_path=$(command tmux display-message -t "$sname" -p '#{pane_current_path}' 2>/dev/null)
         local branch="" tech_id=""
         if [[ -n "$pane_path" && -d "$pane_path/.git" ]]; then
             branch=$(git -C "$pane_path" branch --show-current 2>/dev/null)
@@ -751,7 +753,7 @@ with open('$AGENT_FILE') as f:
             disc_tech+=("$tech_id")
             disc_branch+=("$branch")
         fi
-    done < <(tmux ls 2>/dev/null)
+    done < <(command tmux ls 2>/dev/null)
 
     # Resolve latest sprint file once for all sessions
     local sprint_file=$(ls ~/notes/work_notes/sprints/sprint_*.md 2>/dev/null | sort -t_ -k2 -n | tail -1)
@@ -784,8 +786,8 @@ with open('$AGENT_FILE') as f:
         if [[ -n "$tech_id" && -n "$CLICKUP_TOKEN" ]]; then
             local cu_json=$(curl -s "https://api.clickup.com/api/v2/task/${tech_id}?custom_task_ids=true&team_id=${CLICKUP_TEAM_ID}" \
                 -H "Authorization: $CLICKUP_TOKEN" 2>/dev/null)
-            cu_name=$(echo "$cu_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('name',''))" 2>/dev/null)
-            cu_status=$(echo "$cu_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status',{}).get('status',''))" 2>/dev/null)
+            cu_name=$(printf '%s' "$cu_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('name',''))" 2>/dev/null)
+            cu_status=$(printf '%s' "$cu_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status',{}).get('status',''))" 2>/dev/null)
         fi
 
         # Try to match session name to a task line in the sprint file
@@ -901,7 +903,7 @@ print(m.group(1) if m else '')
                             -H "Content-Type: application/json" \
                             -d "{\"name\": \"${cu_title}\", \"assignees\": [${CLICKUP_USER_ID}], \"status\": \"in progress\"}" 2>/dev/null)
 
-                        task_id=$(echo "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('custom_id',''))" 2>/dev/null)
+                        task_id=$(printf '%s' "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('custom_id',''))" 2>/dev/null)
 
                         if [[ -n "$task_id" && "$task_id" != "None" ]]; then
                             echo "   Created $task_id: $cu_title"
@@ -924,7 +926,7 @@ print(m.group(1) if m else '')
                 local tracked_name="$sname"
                 if [[ -n "$new_name" ]]; then
                     new_name=$(_sanitize_session "$new_name")
-                    tmux rename-session -t "$sname" "$new_name"
+                    command tmux rename-session -t "$sname" "$new_name"
                     tracked_name="$new_name"
                     echo "   Renamed to '$new_name'"
                 fi
@@ -1020,7 +1022,7 @@ print(m.group(1) if m else '')
             -H "Content-Type: application/json" \
             -d "{\"name\": \"${cu_title}\", \"assignees\": [${CLICKUP_USER_ID}], \"status\": \"in progress\"}" 2>/dev/null)
 
-        task_id=$(echo "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('custom_id',''))" 2>/dev/null)
+        task_id=$(printf '%s' "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('custom_id',''))" 2>/dev/null)
 
         if [[ -n "$task_id" && "$task_id" != "None" ]]; then
             echo "Created $task_id: $cu_title"
@@ -1088,7 +1090,7 @@ _agent_live_sessions() {
         local sname=$(echo "$line" | cut -d: -f1)
         echo "$sname" | grep -qE "$EXCLUDED_SESSIONS" && continue
         sessions+=("$sname")
-    done < <(tmux ls 2>/dev/null)
+    done < <(command tmux ls 2>/dev/null)
     _describe 'session' sessions && return 0
 }
 

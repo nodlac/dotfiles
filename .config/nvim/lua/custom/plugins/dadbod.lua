@@ -1,8 +1,8 @@
 return {
   {
-    'tpope/vim-dadbod',
+    'kristijanhusak/vim-dadbod-ui',
     dependencies = {
-      'kristijanhusak/vim-dadbod-ui',
+      'tpope/vim-dadbod',
       'kristijanhusak/vim-dadbod-completion',
     },
     init = function()
@@ -19,7 +19,7 @@ return {
       vim.g.db_ui_default_query = 'SELECT * from "{table}" LIMIT 500;'
       vim.g.db_ui_show_help = 0
       vim.g.db_ui_use_nerd_fonts = 1
-      vim.g.db_adapter_postgres_params = { '--set', 'statement_timeout=300000' }  -- 5min timeout
+      vim.g.db_adapter_postgres_params = '--set statement_timeout=300000'  -- 5min timeout
 
     end,
     config = function()
@@ -34,10 +34,20 @@ return {
         end
       end
 
-      -- Remap <CR> in DBUI drawer to check tunnel before expanding
+      -- DBUI drawer keybindings
       vim.api.nvim_create_autocmd('FileType', {
         pattern = 'dbui',
         callback = function()
+          vim.keymap.set('n', 't', '<Plug>(DBUI_SelectLine)', { buffer = true, desc = 'DBUI toggle' })
+          vim.keymap.set('n', 'r', function()
+            local line = vim.fn.getline('.')
+            for _, name in ipairs(db_names) do
+              if line:find(name, 1, true) then
+                ensure_tunnel(name)
+                break
+              end
+            end
+          end, { buffer = true, desc = 'DBUI reconnect tunnel' })
           vim.keymap.set('n', '<CR>', function()
             local line = vim.fn.getline('.')
             for _, name in ipairs(db_names) do
@@ -46,9 +56,7 @@ return {
                 break
               end
             end
-            -- Pass through to DBUI's original handler
-            local keys = vim.api.nvim_replace_termcodes('<Plug>(DBUI_SelectLine)', true, false, true)
-            vim.api.nvim_feedkeys(keys, 'm', false)
+            vim.cmd('execute "normal \\<Plug>(DBUI_SelectLine)"')
           end, { buffer = true, desc = 'DBUI select with tunnel' })
         end,
       })
@@ -68,6 +76,8 @@ return {
               '-- Date: ' .. os.date '%Y-%m-%d',
               '',
               'SELECT ',
+              '*',
+              'FROM ',
               'LIMIT 500;',
             }
             vim.api.nvim_buf_set_lines(0, 0, -1, false, template)
