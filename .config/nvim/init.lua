@@ -957,7 +957,10 @@ require('lazy').setup({
       ---@diagnostic disable-next-line: missing-fields
       require('tokyonight').setup {
         styles = {
-          comments = { italic = false }, -- Disable italics in comments
+          comments = { italic = false },
+          keywords = { italic = false },
+          functions = { italic = false },
+          variables = { italic = false },
         },
       }
 
@@ -1041,6 +1044,7 @@ require('lazy').setup({
         --  If you are experiencing weird indenting issues, add the language to
         --  the list of additional_vim_regex_highlighting and disabled languages for indent.
         additional_vim_regex_highlighting = { 'ruby' },
+        disable = { 'gitcommit' },
       },
       indent = { enable = true, disable = { 'ruby' } },
     },

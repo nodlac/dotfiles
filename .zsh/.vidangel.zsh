@@ -61,7 +61,7 @@ _va_ensure_containers() {
         -v vidangel-postgres-data:/var/lib/postgresql/data \
         -p 5432:5432
 
-    _va_ensure_container vidangel-redis redis:6-bullseye \
+    _va_ensure_container vidangel-redis redis:7.2.0-alpine \
         -p 6379:6379
 
     _va_ensure_container typesense typesense/typesense:29.0 \
@@ -79,6 +79,26 @@ _va_wait_for_postgres() {
         sleep 1
     done
     echo "  Postgres ready"
+}
+
+_va_wait_for_redis() {
+    echo "  Waiting for Redis..."
+    local retries=10
+    while ! docker exec vidangel-redis redis-cli ping &>/dev/null; do
+        ((retries--)) || { echo "  FAIL: Redis did not become ready"; return 1; }
+        sleep 1
+    done
+    echo "  Redis ready"
+}
+
+_va_wait_for_typesense() {
+    echo "  Waiting for Typesense..."
+    local retries=10
+    while ! curl -sf http://localhost:8108/health -H 'X-TYPESENSE-API-KEY: testing000' &>/dev/null; do
+        ((retries--)) || { echo "  FAIL: Typesense did not become ready"; return 1; }
+        sleep 1
+    done
+    echo "  Typesense ready"
 }
 
 _va_ensure_db_data() {
@@ -138,8 +158,10 @@ vidangel-start-backend() {
     echo "[4/7] Docker containers"
     _va_ensure_containers || return 1
 
-    echo "[5/7] Postgres readiness"
+    echo "[5/7] Service readiness"
     _va_wait_for_postgres || return 1
+    _va_wait_for_redis || return 1
+    _va_wait_for_typesense || return 1
 
     echo "[6/7] Database data"
     _va_ensure_db_data || return 1
@@ -149,7 +171,11 @@ vidangel-start-backend() {
 
     echo ""
     echo "=== Running preflight checks ==="
-    vidangel-preflight
+    vidangel-preflight || return 1
+
+    echo ""
+    echo "=== Starting dev server ==="
+    vidangel-run-devserver
 }
 
 vidangel-reset-server() {
@@ -253,7 +279,7 @@ vidangel-preflight() {
     fi
 
     # Redis
-    _check "Redis responds to ping" "redis-cli -h localhost -p 6379 ping | grep -q PONG"
+    _check "Redis responds to ping" "docker exec vidangel-redis redis-cli ping | grep -q PONG"
 
     # Typesense
     _check "Typesense healthy" "curl -sf http://localhost:8108/health -H 'X-TYPESENSE-API-KEY: testing000' | grep -q ok"
@@ -279,6 +305,9 @@ vidangel-run-devserver() {
     vidangel-preflight || { echo ""; echo "Fix the above failures before starting the server."; return 1; }
     echo ""
 
+    cd ~/vidangel-repo/vidangel-backend
+    source .venv/bin/activate
+
     export CELERY_TASK_ALWAYS_EAGER=False
     export DISABLE_FINNEGAN_ANALYTICS=True
     export DISABLE_ITERABLE=True
@@ -289,7 +318,7 @@ vidangel-run-devserver() {
     export FILTER_HOST=https://sepia.vidangel.com
     export PYTHONUNBUFFERED=1
 
-    python manage.py runserver_debug --skip-checks --skip-migration-checks --print-sql-location --reloader-type=watchdog
+    python3 manage.py runserver_debug --skip-checks --skip-migration-checks --print-sql-location --reloader-type=watchdog
 }
 
 vidangel-stop-backend() {
@@ -312,7 +341,8 @@ vidangel-status-backend() {
 vidangel-celery-worker() {
     cd ~/vidangel-repo/vidangel-backend/
     source .venv/bin/activate
-    DJANGO_SETTINGS_MODULE=vidangel_backend.settings.dev     watchmedo auto-restart -d ./apps -p "*.py" -R -- celery -A vidangel_backend worker -l INFO -P processes -E -c8
+    export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
+    DJANGO_SETTINGS_MODULE=vidangel_backend.settings.dev     watchmedo auto-restart -d ./apps -p "*.py" -R -- celery -A vidangel_backend worker -l INFO -P solo -E
 }
 
 
