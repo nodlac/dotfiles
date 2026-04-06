@@ -279,15 +279,14 @@ vidangel-run-devserver() {
     vidangel-preflight || { echo ""; echo "Fix the above failures before starting the server."; return 1; }
     echo ""
 
-    export CELERY_TASK_ALWAYS_EAGER=f
+    export CELERY_TASK_ALWAYS_EAGER=False
     export DISABLE_FINNEGAN_ANALYTICS=True
     export DISABLE_ITERABLE=True
-    export DISABLE_SQS_PROCESSING=False
+    export DISABLE_SQS_PROCESSING=True
     export DJANGO_SETTINGS_MODULE=vidangel_backend.settings.dev
-    export DJANGO_SHOW_TOOLBAR=T
+    export DJANGO_SHOW_TOOLBAR=True
     export ENABLE_TRACING_MIDDLEWARE=False
     export FILTER_HOST=https://sepia.vidangel.com
-    export IMAGE_WIZARD_URL=http://0.0.0.0:8998/v1
     export PYTHONUNBUFFERED=1
 
     python manage.py runserver_debug --skip-checks --skip-migration-checks --print-sql-location --reloader-type=watchdog
