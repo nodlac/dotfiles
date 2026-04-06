@@ -1,4 +1,5 @@
-##########################################################
+#
+#########################################################
 # Tardis Autocomplete
 ##########################################################
 fpath=( ~/vidangel-repo/tiny-tardis/.completions/zsh $fpath )
@@ -23,6 +24,7 @@ vidangel-restore-dev-dump() {
     psql -h localhost -p 5432 -U root -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'vidangel';"
     psql -h localhost -p 5432 -U root -d postgres -c 'DROP DATABASE vidangel;'
     pg_restore -h localhost -p 5432 -U pgadmin -x -C -d postgres $DUMP_FILE
+    vidangel-reset-server
 }
 
 vidangel-setup-backend() {
@@ -31,7 +33,7 @@ vidangel-setup-backend() {
     git pull
     uv sync
     source ~/vidangel-repo/vidangel-backend/.venv/bin/activate
-    vault login -method=userpass username=caldon password=GYK3cg67foBzEw
+    valut-refresh-token
     w2 ~/vidangel-repo/vidangel-backend/.templates/dev.env.hbs > .env
 
     # Start PostgreSQL (if not already running)
@@ -91,6 +93,14 @@ vidangel-setup-backend() {
         fi
     else
         echo "  typesense already running"
+    fi
+    # Check if DB has data before running reset-server
+    sleep 2  # give postgres a moment to accept connections
+    local row_count=$(psql -h localhost -p 5432 -U root -d vidangel -tAc "SELECT count(*) FROM product_subscription" 2>/dev/null)
+    if [[ -z "$row_count" || "$row_count" -eq 0 ]]; then
+        echo ""
+        echo "⚠️  Database is empty. Run 'vidangel-restore-dev-dump' first, which will call reset-server automatically."
+        return 1
     fi
     vidangel-reset-server
 }
