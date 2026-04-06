@@ -59,4 +59,12 @@ end, {
   desc = 'Run sprint-sync on the current sprint file',
 })
 
+-- Auto-reload sprint files when they change on disk (e.g. after CLI sync)
+vim.api.nvim_create_autocmd({ 'FocusGained', 'BufEnter', 'CursorHold' }, {
+  pattern = '*/sprints/sprint_*.md',
+  callback = function()
+    vim.cmd('checktime')
+  end,
+})
+
 return {}
