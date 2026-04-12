@@ -108,8 +108,8 @@ vim.o.relativenumber = true
 
 vim.o.conceallevel = 0
 
--- Enable mouse mode, can be useful for resizing splits for example!
-vim.o.mouse = 'a'
+-- Disable mouse - allow click to focus window from other apps, but no mouse navigation
+vim.o.mouse = ''
 
 -- Don't show the mode, since it's already in the status line
 vim.o.showmode = false
