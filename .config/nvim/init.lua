@@ -1015,7 +1015,7 @@ require('lazy').setup({
     'nvim-treesitter/nvim-treesitter',
     build = ':TSUpdate',
     main = 'nvim-treesitter.config', -- Sets main module to use for opts
-    -- [[ Configure Treesitter ]] See `:help nvim-treesitter`
+      -- [[ Configure Treesitter ]] See `:help nvim-treesitter`
     opts = {
       ensure_installed = {
         'bash',
@@ -1110,3 +1110,10 @@ vim.opt.runtimepath:append(vim.fn.stdpath 'data' .. '/site')
 
 -- The line beneath this is called `modeline`. See `:help modeline`
 -- vim: ts=2 sts=2 sw=2 et
+
+-- Rebuild treesitter parsers for current platform
+-- Run :TSRebuild after switching OS (e.g., Linux -> Mac)
+vim.api.nvim_create_user_command('TSRebuild', function()
+  vim.cmd('TSUpdateSync')
+  vim.notify('Treesitter parsers rebuilt for ' .. vim.fn.system('uname'):gsub('%s+', ''), vim.log.levels.INFO)
+end, {})
