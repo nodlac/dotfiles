@@ -1,82 +1,96 @@
 #!/usr/bin/env bash
 set -e
 
-echo "=== OS Setup Script for EndeavourOS/Arch ==="
-echo "Run with: sudo ./setup.sh"
+echo "=== EndeavourOS Setup Script ==="
+echo "Run with: sudo ~/.endevouros-setup.sh"
+echo ""
+
+install_yay() {
+    echo "=== Installing yay (AUR helper) ==="
+    if command -v yay &>/dev/null; then
+        echo "  yay already installed"
+    else
+        git clone https://aur.archlinux.org/yay.git /tmp/yay
+        cd /tmp/yay
+        makepkg -si --noconfirm
+        cd -
+        rm -rf /tmp/yay
+    fi
+}
+
+load_packages() {
+    CONFIG_FILE="$HOME/.dotfiles/.setup.conf"
+    
+    if [ -f "$CONFIG_FILE" ]; then
+        echo "  Reading from $CONFIG_FILE"
+        grep -v '^#' "$CONFIG_FILE" | grep -v '^$' | awk '{print $1}' | sort -u
+    else
+        echo "  $CONFIG_FILE not found, using defaults"
+        cat << 'DEFAULTS'
+ghostty
+i3-wm
+rofi
+dunst
+i3blocks
+i3lock
+zsh
+arduino-cli
+nodejs
+npm
+go
+neovim
+python
+python-pip
+pyenv
+arandr
+brightnessctl
+fzf
+fd
+mcfly
+scrot
+tmux
+xbindkeys
+xclip
+tldr
+valkey
+mpv
+meld
+nwg-look
+network-manager-applet
+pavucontrol
+playerctl
+obs-studio
+DEFAULTS
+    fi
+}
 
 install_packages() {
-    echo "=== Installing system packages ==="
+    echo "=== Installing user packages ==="
     
-    # Core packages
-    PACMAN_PACKAGES=(
-        # Base development
-        base-devel git curl wget make gcc pkgconf autoconf automake
-        # Shell
-        zsh fish bash-completion
-        # Terminal & UI
-        i3-wm i3blocks i3lock i3status rofi dunst feh scrot
-        xfce4-terminal ghostty
-        # Network & Bluetooth
-        NetworkManager bluez bluez-utils dnsmasq
-        # Audio
-        pipewire pipewire-alsa pipewire-pulse pipewire-jack
-        alsa-utils pavucontrol playerctl
-        # Development tools
-        vim neovim nodejs npm python python-pip go
-        # Build tools
-        cmake ninja
-        # Fonts
-        noto-fonts noto-fonts-cjk noto-fonts-emoji cantarell-fonts
-        # Utils
-        fzf fd ripgrep bat exa duf htop btop tmux
-        parallel tree jq yadm
-        # Docker
-        docker docker-compose
-        # Tools
-        arandr brightnessctl xbindkeys
-        # Arduino
-        arduino-cli
-        # Media
-        ffmpeg mpv imagemagick
-        # Printing
-        cups cups-filters system-config-printer
-        # Misc
-        xclip unrar zip unzip p7zip
-        yay
-    )
+    mapfile -t PACMAN_PACKAGES < <(load_packages)
     
     sudo pacman -Syu --needed --noconfirm "${PACMAN_PACKAGES[@]}"
-    
-    # AUR packages (using yay)
-    AUR_PACKAGES=(
-        brave-bin
-    )
-    
-    for pkg in "${AUR_PACKAGES[@]}"; do
-        if ! pacman -Qq "$pkg" &>/dev/null; then
-            yay -S --needed --noconfirm "$pkg"
-        fi
-    done
 }
 
 install_pip_packages() {
     echo "=== Installing Python packages ==="
     
-    PIP_PACKAGES=(
-        pipx
-        uv
-        argcomplete
-        glances
-        psutil
-    )
-    
-    pip3 install --break-system-packages "${PIP_PACKAGES[@]}"
+    if command -v pip3 &>/dev/null; then
+        pip3 install --break-system-packages --no-cache-dir \
+            argcomplete glances psutil python-uv
+    else
+        echo "  pip3 not found, skipping"
+    fi
 }
 
 install_npm_packages() {
     echo "=== Installing global npm packages ==="
     
-    npm install -g node-gyp semver nopt
+    if command -v npm &>/dev/null; then
+        npm install -g node-gyp nopt semver
+    else
+        echo "  npm not found, skipping"
+    fi
 }
 
 setup_dotfiles() {
@@ -89,14 +103,18 @@ setup_dotfiles() {
         git clone git@github.com:nodlac/dotfiles.git "$HOME/.dotfiles"
     fi
     
-    find "$HOME/.dotfiles" -maxdepth 1 -type f -name ".*" | while read -r f; do
+    for f in "$HOME/.dotfiles"/.*; do
+        [ -f "$f" ] || continue
         base=$(basename "$f")
+        [ "$base" = "." ] && continue
+        [ "$base" = ".." ] && continue
         [ "$base" = ".git" ] && continue
         ln -sf "$f" "$HOME/$base"
     done
     
     if [ -d "$HOME/.dotfiles/.config" ]; then
-        find "$HOME/.dotfiles/.config" -maxdepth 1 -type d | while read -r d; do
+        for d in "$HOME/.dotfiles/.config"/*; do
+            [ -d "$d" ] || continue
             base=$(basename "$d")
             mkdir -p "$HOME/.config/$base"
             ln -sf "$d" "$HOME/.config/$base"
@@ -104,47 +122,86 @@ setup_dotfiles() {
     fi
 }
 
-setup_i3wm() {
-    echo "=== Setting up i3-wm ==="
+setup_zsh_plugins() {
+    echo "=== Setting up zsh plugins ==="
     
-    # Install i3 related packages
-    sudo pacman -S --needed --noconfirm \
-        i3-wm i3blocks i3lock i3status rofi dunst feh scrot \
-        brightnessctl xbindkeys numlockx redshift \
-        picom xorg-server lxappearance
-        
-    # Enable i3wm in display manager or startx
-    echo "exec i3" > ~/.xinitrc
+    if [ ! -d "$HOME/.zsh/zsh-history-substring-search" ]; then
+        git clone https://github.com/zsh-users/zsh-history-substring-search "$HOME/.zsh/zsh-history-substring-search"
+    else
+        echo "  zsh-history-substring-search already cloned"
+    fi
+}
+
+setup_tools() {
+    echo "=== Running tools/install.sh ==="
+    
+    if [ -f "$HOME/.dotfiles/tools/install.sh" ]; then
+        source "$HOME/.dotfiles/tools/install.sh"
+    else
+        echo "  tools/install.sh not found"
+    fi
 }
 
 enable_services() {
     echo "=== Enabling services ==="
     
-    # Docker
-    sudo systemctl enable docker
-    sudo systemctl start docker
+    sudo systemctl enable docker 2>/dev/null || true
+    sudo systemctl start docker 2>/dev/null || true
     
-    # NetworkManager
-    sudo systemctl enable NetworkManager
-    sudo systemctl start NetworkManager
+    sudo systemctl enable NetworkManager 2>/dev/null || true
+    sudo systemctl start NetworkManager 2>/dev/null || true
     
-    # Bluetooth
-    sudo systemctl enable bluetooth
-    sudo systemctl start bluetooth
+    sudo systemctl enable bluetooth 2>/dev/null || true
+    sudo systemctl start bluetooth 2>/dev/null || true
+}
+
+set_default_shell() {
+    echo "=== Setting default shell to zsh ==="
+    
+    if command -v zsh &>/dev/null; then
+        if [ "$SHELL" != "/usr/bin/zsh" ]; then
+            chsh -s /usr/bin/zsh
+        else
+            echo "  zsh already default shell"
+        fi
+    else
+        echo "  zsh not found, skipping"
+    fi
+}
+
+setup_infisical() {
+    echo "=== Setting up Infisical ==="
+    
+    DOMAIN="thepit.vidnagel.com"
+    
+    if command -v infisical &>/dev/null; then
+        echo "  infisical CLI already installed"
+    else
+        curl -1sLf https://dl.infisical.com/shell/install.sh | sh
+    fi
+    
+    echo "Run: infisical login"
+    echo "Then: infisical secrets pull --project=default --env=dev --format=dotenv -o ~/.env"
 }
 
 main() {
+    install_yay
     install_packages
     install_pip_packages
     install_npm_packages
     setup_dotfiles
+    setup_zsh_plugins
+    setup_tools
     enable_services
+    set_default_shell
+    # setup_infisical
     
+    echo ""
     echo "=== Setup complete! ==="
-    echo "You may want to:"
-    echo "  1. Reboot or restart X"
-    echo "  2. Set up your dotfiles repo"
-    echo "  3. Configure your fonts and theme"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Restart shell or log out/in"
+    echo "  2. Uncomment setup_infisical() and run to set up Infisical at thepit.vidnagel.com"
 }
 
 main "$@"
