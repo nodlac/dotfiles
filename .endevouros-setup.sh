@@ -2,8 +2,16 @@
 set -e
 
 echo "=== EndeavourOS Setup Script ==="
-echo "Run with: sudo ~/.endevouros-setup.sh"
+echo "Run with: ~/.endevouros-setup.sh (without sudo, will prompt for password)"
 echo ""
+
+get_user_home() {
+    if [ -n "$SUDO_USER" ]; then
+        getent passwd "$SUDO_USER" | cut -d: -f6
+    else
+        echo "$HOME"
+    fi
+}
 
 install_yay() {
     echo "=== Installing yay (AUR helper) ==="
@@ -19,11 +27,12 @@ install_yay() {
 }
 
 load_packages() {
-    CONFIG_FILE="$HOME/.dotfiles/.setup.conf"
+    USER_HOME=$(get_user_home)
+    CONFIG_FILE="$USER_HOME/.dotfiles/.setup.conf"
     
     if [ -f "$CONFIG_FILE" ]; then
-        echo "  Reading from $CONFIG_FILE"
-        grep -v '^#' "$CONFIG_FILE" | grep -v '^$' | awk '{print $1}' | sort -u
+        echo "  Reading from $CONFIG_FILE" >&2
+        grep -v '^#' "$CONFIG_FILE" | grep -v '^$' | grep -v '^-' | awk '{print $1}' | sort -u
     else
         echo "  $CONFIG_FILE not found, using defaults"
         cat << 'DEFAULTS'
@@ -72,6 +81,30 @@ install_packages() {
     sudo pacman -Syu --needed --noconfirm "${PACMAN_PACKAGES[@]}"
 }
 
+install_aur_packages() {
+    echo "=== Installing AUR packages (may retry on failure) ==="
+    
+    USER_HOME=$(get_user_home)
+    CONFIG_FILE="$USER_HOME/.dotfiles/.setup.conf"
+    
+    if [ ! -f "$CONFIG_FILE" ]; then
+        return
+    fi
+    
+    AUR_PACKAGES=$(grep -v '^#' "$CONFIG_FILE" | grep -v '^$' | awk '{print $1}' | grep -E '^-' | sed 's/^-//' | sort -u)
+    
+    if [ -n "$AUR_PACKAGES" ]; then
+        if command -v yay &>/dev/null; then
+            for pkg in $AUR_PACKAGES; do
+                echo "  Installing $pkg..."
+                yay -S --needed --noconfirm "$pkg" || echo "  $pkg failed, skipping"
+            done
+        else
+            echo "  yay not found, skipping AUR packages"
+        fi
+    fi
+}
+
 install_pip_packages() {
     echo "=== Installing Python packages ==="
     
@@ -85,9 +118,18 @@ install_pip_packages() {
 
 install_npm_packages() {
     echo "=== Installing global npm packages ==="
+    USER_HOME=$(get_user_home)
     
     if command -v npm &>/dev/null; then
-        npm install -g node-gyp nopt semver
+        NPM_DIR="$USER_HOME/.npm-global"
+        mkdir -p "$NPM_DIR"
+        
+        echo "prefix=$NPM_DIR" > "$USER_HOME/.npmrc"
+        
+        export PATH="$NPM_DIR/bin:$PATH"
+        npm install -g nopt semver 2>/dev/null || true
+        
+        echo "  Configured npm to use $NPM_DIR"
     else
         echo "  npm not found, skipping"
     fi
@@ -95,38 +137,49 @@ install_npm_packages() {
 
 setup_dotfiles() {
     echo "=== Setting up dotfiles ==="
+    USER_HOME=$(get_user_home)
     
-    if [ -d "$HOME/.dotfiles" ]; then
-        cd "$HOME/.dotfiles"
-        git pull
+    if [ -d "$USER_HOME/.dotfiles" ]; then
+        cd "$USER_HOME/.dotfiles"
+        
+        if git rev-parse --git-dir >/dev/null 2>&1; then
+            git pull
+            git config core.bare false
+            git config core.worktree "$USER_HOME"
+        fi
     else
-        git clone git@github.com:nodlac/dotfiles.git "$HOME/.dotfiles"
+        git clone git@github.com:nodlac/dotfiles.git "$USER_HOME/.dotfiles"
+        cd "$USER_HOME/.dotfiles"
+        git config core.bare false
+        git config core.worktree "$USER_HOME"
     fi
     
-    for f in "$HOME/.dotfiles"/.*; do
+    for f in "$USER_HOME/.dotfiles"/.*; do
         [ -f "$f" ] || continue
         base=$(basename "$f")
         [ "$base" = "." ] && continue
         [ "$base" = ".." ] && continue
         [ "$base" = ".git" ] && continue
-        ln -sf "$f" "$HOME/$base"
+        [ "$base" = ".dotfiles" ] && continue
+        ln -sf "$f" "$USER_HOME/$base"
     done
     
-    if [ -d "$HOME/.dotfiles/.config" ]; then
-        for d in "$HOME/.dotfiles/.config"/*; do
+    if [ -d "$USER_HOME/.dotfiles/.config" ]; then
+        for d in "$USER_HOME/.dotfiles/.config"/*; do
             [ -d "$d" ] || continue
             base=$(basename "$d")
-            mkdir -p "$HOME/.config/$base"
-            ln -sf "$d" "$HOME/.config/$base"
+            mkdir -p "$USER_HOME/.config/$base"
+            ln -sf "$d" "$USER_HOME/.config/$base"
         done
     fi
 }
 
 setup_zsh_plugins() {
     echo "=== Setting up zsh plugins ==="
+    USER_HOME=$(get_user_home)
     
-    if [ ! -d "$HOME/.zsh/zsh-history-substring-search" ]; then
-        git clone https://github.com/zsh-users/zsh-history-substring-search "$HOME/.zsh/zsh-history-substring-search"
+    if [ ! -d "$USER_HOME/.zsh/zsh-history-substring-search" ]; then
+        git clone https://github.com/zsh-users/zsh-history-substring-search "$USER_HOME/.zsh/zsh-history-substring-search"
     else
         echo "  zsh-history-substring-search already cloned"
     fi
@@ -134,9 +187,10 @@ setup_zsh_plugins() {
 
 setup_tools() {
     echo "=== Running tools/install.sh ==="
+    USER_HOME=$(get_user_home)
     
-    if [ -f "$HOME/.dotfiles/tools/install.sh" ]; then
-        source "$HOME/.dotfiles/tools/install.sh"
+    if [ -f "$USER_HOME/.dotfiles/tools/install.sh" ]; then
+        source "$USER_HOME/.dotfiles/tools/install.sh"
     else
         echo "  tools/install.sh not found"
     fi
@@ -157,9 +211,10 @@ enable_services() {
 
 set_default_shell() {
     echo "=== Setting default shell to zsh ==="
+    USER_HOME=$(get_user_home)
     
     if command -v zsh &>/dev/null; then
-        if [ "$SHELL" != "/usr/bin/zsh" ]; then
+        if [ "$(getent passwd $(whoami) | cut -d: -f7)" != "/usr/bin/zsh" ]; then
             chsh -s /usr/bin/zsh
         else
             echo "  zsh already default shell"
@@ -187,6 +242,7 @@ setup_infisical() {
 main() {
     install_yay
     install_packages
+    install_aur_packages
     install_pip_packages
     install_npm_packages
     setup_dotfiles
