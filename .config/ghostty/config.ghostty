@@ -1,4 +1,1 @@
-# Ctrl+Backspace via Kitty Keyboard Protocol
-keybind = ctrl+backspace=text:\x1B[?2$u
-
 # Mouse toggle handled by tmux: Ctrl-Space m
