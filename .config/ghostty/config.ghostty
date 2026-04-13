@@ -1,1 +1,1 @@
-keybind = ctrl+shift+m=toggle_mouse_reporting   
+# Mouse toggle handled by tmux: Ctrl-Space m   
