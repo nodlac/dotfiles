@@ -22,10 +22,8 @@ HEADER_LINES = 2
 FOOTER_LINES = 1
 DIVIDER_LINE = 1
 
-# Column widths
-W_STATUS  = 8
-W_TYPE    = 16
-W_SESSION = 28
+# Column widths (minimum / fixed)
+W_STATUS  = 10
 W_CLICKUP = 11
 
 # Color pair indices
@@ -39,6 +37,7 @@ C_BAR      = 7
 C_PREVIEW  = 8
 C_REVIEW   = 9
 C_TESTING  = 10
+C_FOCUS    = 11
 
 STATUS_ORDER  = {'active': 0, 'review': 1, 'testing': 2, 'blocked': 3, 'stale': 4, 'done': 5}
 STATUS_MARKER = {'active': '*', 'review': 'R', 'testing': 'T', 'blocked': '!', 'stale': '?', 'done': 'd'}
@@ -73,6 +72,31 @@ def update_agent_status(session, new_status):
     _rewrite_csv(transform)
 
 
+def toggle_focus(session):
+    """Toggle the Focus flag for a session."""
+    def transform(rows):
+        # Find Focus column index from header
+        if not rows:
+            return rows
+        header = rows[0]
+        try:
+            fi = header.index('Focus')
+        except ValueError:
+            # Add Focus column
+            header.append('Focus')
+            fi = len(header) - 1
+            for row in rows[1:]:
+                while len(row) <= fi:
+                    row.append('')
+        for row in rows[1:]:
+            while len(row) <= fi:
+                row.append('')
+            if len(row) > 3 and row[3] == session:
+                row[fi] = '' if row[fi] == '1' else '1'
+        return rows
+    _rewrite_csv(transform)
+
+
 def remove_agent(session):
     _rewrite_csv(lambda rows: [r for r in rows if not (len(r) > 3 and r[3] == session)])
 
@@ -92,6 +116,44 @@ def get_live_sessions():
                 if not EXCLUDED.match(line.split(":")[0])}
     except Exception:
         return set()
+
+
+def get_pane_path(session):
+    """Get the current working directory of a tmux session's active pane."""
+    try:
+        return subprocess.check_output(
+            ["tmux", "display-message", "-t", session, "-p", "#{pane_current_path}"],
+            stderr=subprocess.DEVNULL, text=True
+        ).strip()
+    except Exception:
+        return ""
+
+
+def remove_worktree(path):
+    """Remove a git worktree directory, falling back to rm -rf."""
+    if not path or not os.path.isfile(os.path.join(path, ".git")):
+        return
+    try:
+        main_repo = subprocess.check_output(
+            ["git", "-C", path, "rev-parse", "--git-common-dir"],
+            stderr=subprocess.DEVNULL, text=True
+        ).strip().removesuffix("/.git")
+    except Exception:
+        main_repo = ""
+
+    if main_repo:
+        result = subprocess.run(
+            ["git", "-C", main_repo, "worktree", "remove", path, "--force"],
+            stderr=subprocess.DEVNULL
+        )
+        if result.returncode != 0:
+            import shutil
+            shutil.rmtree(path, ignore_errors=True)
+            subprocess.run(["git", "-C", main_repo, "worktree", "prune"],
+                           stderr=subprocess.DEVNULL)
+    else:
+        import shutil
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def get_pane_output(session, lines=50):
@@ -131,6 +193,7 @@ class Dashboard:
         self.hide_done   = False
         self.search      = ''
         self._pending_g  = False
+        self._show_help  = False
         # sort_mode: 'status' | 'alpha' | 'age'
         self.sort_mode   = 'status'
         # pane_cache: {session: (lines, timestamp)}
@@ -152,6 +215,7 @@ class Dashboard:
         curses.init_pair(C_PREVIEW,  curses.COLOR_WHITE,   -1)
         curses.init_pair(C_REVIEW,   curses.COLOR_MAGENTA, -1)
         curses.init_pair(C_TESTING,  curses.COLOR_YELLOW,  -1)
+        curses.init_pair(C_FOCUS,    curses.COLOR_CYAN,    -1)
         COLOR_MAP = {
             'active':  curses.color_pair(C_ACTIVE),
             'review':  curses.color_pair(C_REVIEW)  | curses.A_BOLD,
@@ -161,7 +225,7 @@ class Dashboard:
             'done':    curses.color_pair(C_DONE)    | curses.A_DIM,
         }
         self.stdscr.nodelay(True)
-        self.stdscr.timeout(500)
+        self.stdscr.timeout(100)
 
     def refresh_data(self):
         self.agents = load_agents()
@@ -174,13 +238,20 @@ class Dashboard:
             status  = a.get('Status', '')
             session = a.get('Session', '')
             ds = 'stale' if status == 'active' and session not in self.live else status
-            enriched.append({**a, '_ds': ds})
+            focus = a.get('Focus', '') == '1'
+            enriched.append({**a, '_ds': ds, '_focus': focus})
+        # Focus always sorts to top, then by chosen mode
+        # Focus sorts to bottom (out of the way), then by chosen mode
         if self.sort_mode == 'alpha':
-            enriched.sort(key=lambda a: a.get('Session', '').lower())
+            enriched.sort(key=lambda a: (1 if a['_focus'] else 0, a.get('Session', '').lower()))
         elif self.sort_mode == 'age':
-            enriched.sort(key=lambda a: a.get('Started', '') or '', reverse=True)
+            rest = [a for a in enriched if not a['_focus']]
+            focused = [a for a in enriched if a['_focus']]
+            rest.sort(key=lambda a: a.get('Started', '') or '', reverse=True)
+            focused.sort(key=lambda a: a.get('Started', '') or '', reverse=True)
+            enriched = rest + focused
         else:  # status (default)
-            enriched.sort(key=lambda a: (STATUS_ORDER.get(a['_ds'], 9), a.get('Session', '').lower()))
+            enriched.sort(key=lambda a: (1 if a['_focus'] else 0, STATUS_ORDER.get(a['_ds'], 9), a.get('Session', '').lower()))
         if self.hide_done:
             enriched = [a for a in enriched if a['_ds'] != 'done']
         if self.search:
@@ -220,7 +291,7 @@ class Dashboard:
     def _get_pane(self, session, lines=50):
         now = time.time()
         cached = self.pane_cache.get(session)
-        if cached and now - cached[1] < 10:
+        if cached and now - cached[1] < 3:
             return cached[0]
         output = get_pane_output(session, max(lines, 50))
         self.pane_cache[session] = (output, now)
@@ -240,9 +311,18 @@ class Dashboard:
         self.selected = max(0, min(self.selected, len(enriched) - 1)) if enriched else 0
 
         available    = h - HEADER_LINES - FOOTER_LINES - DIVIDER_LINE
-        list_rows    = max(1, min(len(enriched), available - 3))
-        preview_rows = max(0, available - list_rows)
-        W_TASK       = max(w - W_STATUS - W_TYPE - W_SESSION - W_CLICKUP - 6, 10)
+        # Reserve a row for focus separator if needed
+        has_focus_sep = any(a.get('Focus') == '1' for a in self.agents) and \
+                        any(a.get('Focus') != '1' for a in self.agents)
+        sep_rows     = 1 if has_focus_sep else 0
+        list_rows    = max(1, min(len(enriched), available - 3 - sep_rows))
+        preview_rows = max(0, available - list_rows - sep_rows)
+
+        # Proportional columns based on terminal width
+        flex = w - W_STATUS - W_CLICKUP - 5  # remaining space after fixed cols
+        W_SESSION = max(16, int(flex * 0.30))
+        W_TASK    = max(10, int(flex * 0.50))
+        W_TYPE    = max(8, flex - W_SESSION - W_TASK)
 
         # title bar
         ago    = int(time.time() - self.last_refresh)
@@ -262,27 +342,46 @@ class Dashboard:
         elif self.selected < self.scroll:
             self.scroll = self.selected
 
+        # Find where focused section starts (first focused item index)
+        sep_before = -1
+        for ei, a in enumerate(enriched):
+            if a.get('_focus'):
+                if ei > 0 and not enriched[ei - 1].get('_focus'):
+                    sep_before = ei
+                break
+
+        extra = 0  # extra rows consumed by separator
         for i in range(list_rows):
             idx = i + self.scroll
             if idx >= len(enriched):
                 break
+            row_y = HEADER_LINES + i + extra
+            if row_y >= h - FOOTER_LINES - 1:
+                break
+
+            # Draw separator before focused section
+            if idx == sep_before and extra == 0:
+                self._write(row_y, 0, ("─" * w)[:w], curses.color_pair(C_HEADER) | curses.A_DIM)
+                extra = 1
+                row_y += 1
+                if row_y >= h - FOOTER_LINES - 1:
+                    break
+
             a      = enriched[idx]
             ds     = a['_ds']
-            status = f"{STATUS_MARKER.get(ds, ' ')} {ds}"
+            focus  = '▸' if a.get('_focus') else ' '
+            status = f"{focus}{STATUS_MARKER.get(ds, ' ')} {ds}"
             type_age = (a.get('Type','') or age_str(a.get('Started','')))[:W_TYPE]
             line   = (f" {status:<{W_STATUS}} {a.get('Session','')[:W_SESSION]:<{W_SESSION}} "
                       f"{a.get('Task','')[:W_TASK]:<{W_TASK}} "
                       f"{a.get('ClickUp','')[:W_CLICKUP]:<{W_CLICKUP}} "
                       f"{type_age:<{W_TYPE}}")
-            row_y = HEADER_LINES + i
-            if row_y >= h - FOOTER_LINES - 1:
-                break
             attr = (curses.color_pair(C_SELECTED) | curses.A_BOLD) if idx == self.selected \
                    else COLOR_MAP.get(ds, 0)
             self._write(row_y, 0, line[:w].ljust(min(w, len(line) + 1)), attr)
 
         # divider
-        div_y = HEADER_LINES + list_rows
+        div_y = HEADER_LINES + list_rows + extra
         if div_y < h - FOOTER_LINES:
             sel = self._selected_agent(enriched)
             label   = f" Preview: {sel['Session']} " if sel else " Preview "
@@ -310,10 +409,13 @@ class Dashboard:
                 self._write(py0, 0, " (session not running)", curses.color_pair(C_BLOCKED))
 
         # footer
-        self._bar(h - 1,
-                  " [↑↓/jk/gg/G] navigate  [enter] switch  [c] command  [K] ctrl+c  "
-                  "[n] new  [a] active  [r] review  [t] testing  [b] blocked  [d] done  [x] done+kill  "
-                  "[/?] search  [o] sort  [h] hide done  [PgUp/PgDn] preview  [v] refresh  [q] quit", w)
+        if self._show_help:
+            footer = (" j/k:nav  enter:jump  c:cmd  K:^C  n:new  f:focus  "
+                       "a:active  r:review  t:test  b:block  d:done  x:kill  "
+                       "/:search  o:sort  h:hide  PgUp/Dn:scroll  v:refresh  q:quit")
+        else:
+            footer = " j/k:nav  enter:jump  c:cmd  f:focus  /:search  q:quit  ?:help"
+        self._bar(h - 1, footer, w)
 
         self.stdscr.noutrefresh()
         curses.doupdate()
@@ -325,6 +427,14 @@ class Dashboard:
             self.stdscr.attroff(curses.color_pair(C_BAR) | curses.A_BOLD)
         except curses.error:
             pass
+
+    def _flash(self, msg):
+        """Show a brief message on the footer bar."""
+        h, w = self.stdscr.getmaxyx()
+        self._bar(h - 1, f' {msg}', w)
+        self.stdscr.noutrefresh()
+        curses.doupdate()
+        curses.napms(1200)
 
     def _write(self, y, x, text, attr=0):
         try:
@@ -390,12 +500,17 @@ class Dashboard:
                 else:
                     self._pending_g = True
 
-            elif key in (ord('/'), ord('?')):
+            elif key == ord('/'):
                 query = self._prompt(f" /search [{self.search}]: " if self.search else " /search: ")
-                if query.strip() or not self.search:
+                if query is None:
+                    pass  # ESC — leave search unchanged
+                else:
                     self.search = query.strip()
                 self.selected = 0
                 self.scroll = 0
+
+            elif key == ord('?'):
+                self._show_help = not self._show_help
 
             elif key == 27:  # ESC clears search
                 self.search = ''
@@ -452,17 +567,33 @@ class Dashboard:
                 if agent:
                     session = agent['Session']
                     choice = self._prompt(f" '{session}': [k]ill  [u]ntrack  [c]ancel: ")
-                    choice = choice.strip().lower()
+                    choice = (choice or '').strip().lower()
                     if choice in ('k', 'kill'):
                         append_log(session, 'session killed from dashboard')
+                        # Grab worktree path before killing session
+                        pane_path = get_pane_path(session)
                         subprocess.run(["tmux", "kill-session", "-t", session],
                                        stderr=subprocess.DEVNULL)
+                        remove_worktree(pane_path)
                         remove_agent(session)
                         self._refresh_pinned(enriched)
                     elif choice in ('u', 'untrack'):
                         append_log(session, 'untracked from dashboard')
                         remove_agent(session)
                         self._refresh_pinned(enriched)
+
+            elif key in (ord('f'), ord('F')):
+                if agent:
+                    is_focused = agent.get('_focus')
+                    if not is_focused:
+                        focus_count = sum(1 for a in enriched if a.get('_focus'))
+                        if focus_count >= 5:
+                            self._flash('Focus limit reached (max 5)')
+                            continue
+                    toggle_focus(agent['Session'])
+                    new_state = 'unfocused' if is_focused else 'focused'
+                    append_log(agent['Session'], f'{new_state} from dashboard')
+                    self._refresh_pinned(enriched)
 
             elif key in (ord('a'), ord('A')):
                 if agent:
@@ -511,7 +642,7 @@ class Dashboard:
                         self.last_refresh = 0  # mark stale, refresh on next cycle
 
     def _prompt(self, label):
-        """Inline input at the footer bar. Returns text or '' if cancelled."""
+        """Inline input at the footer bar. Returns text on Enter, None on ESC/cancel."""
         h, w = self.stdscr.getmaxyx()
         buf  = []
         curses.flushinp()  # discard any stale keypresses before opening prompt
@@ -532,12 +663,11 @@ class Dashboard:
                 try:
                     ch = self.stdscr.getch()
                 except (curses.error, KeyboardInterrupt):
-                    return ''
+                    return None
                 if ch in (curses.KEY_ENTER, ord('\n'), ord('\r')):
-                    if buf:  # ignore Enter on empty buffer — keep prompt open
-                        return ''.join(buf)
+                    return ''.join(buf)
                 elif ch == 27:
-                    return ''
+                    return None
                 elif ch in (curses.KEY_BACKSPACE, 127, 8):
                     if buf:
                         buf.pop()
@@ -547,7 +677,7 @@ class Dashboard:
             curses.flushinp()
             curses.curs_set(0)
             self.stdscr.nodelay(True)
-            self.stdscr.timeout(500)
+            self.stdscr.timeout(100)
 
     def _popup_edit(self, title=""):
         """Open nvim in a tmux popup for multiline editing. Returns text or ''."""

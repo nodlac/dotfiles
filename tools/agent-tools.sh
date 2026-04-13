@@ -2,6 +2,19 @@
 
 [[ -f ~/.env ]] && source ~/.env
 
+# ── Auto-reload: re-source this file if it changed on disk ──────────────
+_agent_tools_reload() {
+    local current_hash=$(md5 -q "$HOME/tools/agent-tools.sh" 2>/dev/null)
+    if [[ -n "$_AGENT_TOOLS_HASH" && "$current_hash" != "$_AGENT_TOOLS_HASH" ]]; then
+        _AGENT_TOOLS_HASH="$current_hash"
+        source "$HOME/tools/agent-tools.sh"
+        return 1  # signal: reloaded, caller should re-invoke
+    fi
+    _AGENT_TOOLS_HASH="$current_hash"
+    return 0  # no change
+}
+[[ -z "$_AGENT_TOOLS_HASH" ]] && _AGENT_TOOLS_HASH=$(md5 -q "$HOME/tools/agent-tools.sh" 2>/dev/null)
+
 AGENT_FILE="$HOME/notes/work_notes/sprints/agents.csv"
 AGENT_LOG="$HOME/notes/work_notes/sprints/agent-log.md"
 CLICKUP_BASE="https://app.clickup.com/t/${CLICKUP_TEAM_ID:-14252037}"
@@ -10,9 +23,9 @@ REPO_DIR="$HOME/vidangel-repo"
 
 # Ensure agents.csv exists with header
 if [[ ! -f "$AGENT_FILE" ]]; then
-    echo "Status,Task,ClickUp,Session,Notes,Started,Type" > "$AGENT_FILE"
+    echo "Status,Task,ClickUp,Session,Notes,Started,Type,Focus" > "$AGENT_FILE"
 elif ! head -1 "$AGENT_FILE" | grep -q "^Status,"; then
-    echo "Status,Task,ClickUp,Session,Notes,Started,Type" | cat - "$AGENT_FILE" > /tmp/_agents_fix.csv && mv /tmp/_agents_fix.csv "$AGENT_FILE"
+    echo "Status,Task,ClickUp,Session,Notes,Started,Type,Focus" | cat - "$AGENT_FILE" > /tmp/_agents_fix.csv && mv /tmp/_agents_fix.csv "$AGENT_FILE"
 fi
 
 # Sanitize a session name: spaces to dashes, lowercase, strip non-alphanumeric
@@ -107,104 +120,190 @@ with open('$AGENT_FILE', 'w', newline='') as f:
 }
 
 # --- agent-start ---
-# Interactive: creates a tmux session, adds a row to agents.csv, launches claude code
-# Usage: agent-start [-t repo|analytics]
+# Opens nvim with a pre-populated template, parses it, creates tmux session + worktree
+# Usage: agent-start
 agent-start() {
-    local agent_type=""
+    _agent_tools_reload || { agent-start "$@"; return; }
+    # ── 1. Pre-questions ────────────────────────────────────────────────────
+    local task_id="" cu_name="" cu_status=""
+    local agent_type="" repo_name=""
 
-    # Parse flags
-    while [[ "$1" == -* ]]; do
-        case "$1" in
-            -t) agent_type="$2"; shift 2 ;;
-            *) echo "Unknown flag: $1"; return 1 ;;
-        esac
-    done
+    # Task ID
+    printf "Task ID (number, TECH-XXXX, 'new', enter to skip): "
+    read -r task_id
 
-    # Type selection if not provided
-    if [[ -z "$agent_type" ]]; then
-        printf "Type [r]epo  [a]nalytics  [g]eneral (default): "
-        read -r agent_type
-        agent_type="${agent_type:-general}"
+    if [[ "$task_id" =~ ^[0-9]+$ ]]; then
+        task_id="TECH-${task_id}"
     fi
 
-    # Resolve single-letter shortcuts
+    # Look up in ClickUp
+    if [[ -n "$task_id" && "$task_id" != "new" && -n "$CLICKUP_TOKEN" ]]; then
+        local cu_json=$(curl -s "https://api.clickup.com/api/v2/task/${task_id}?custom_task_ids=true&team_id=${CLICKUP_TEAM_ID}" \
+            -H "Authorization: $CLICKUP_TOKEN" 2>/dev/null)
+        cu_name=$(printf '%s' "$cu_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('name',''))" 2>/dev/null)
+        cu_status=$(printf '%s' "$cu_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status',{}).get('status',''))" 2>/dev/null)
+        [[ "$cu_name" == "None" ]] && cu_name=""
+        if [[ -n "$cu_name" ]]; then
+            echo "  Found: $cu_name [$cu_status]"
+        else
+            echo "  Could not find $task_id in ClickUp."
+            task_id=""
+        fi
+    fi
+
+    # Type
+    printf "Type — [r]epo  [a]nalytics  [g]eneral: "
+    read -r agent_type
     case "$agent_type" in
-        r) agent_type="repo" ;;
-        a) agent_type="analytics" ;;
-        g) agent_type="general" ;;
+        r|repo)      agent_type="repo" ;;
+        a|analytics) agent_type="analytics" ;;
+        g|general|"") agent_type="general" ;;
     esac
 
-    # Task ID — loop until confirmed or skipped
-    local _cu_name_for_desc=""
-    while true; do
-        printf "Task ID (number, TECH-XXXX, 'new' to create, enter to skip): "
-        read -r task_id
+    # Repo (only if type is repo)
+    if [[ "$agent_type" == "repo" ]]; then
+        local repos=()
+        for d in "$REPO_DIR"/*/; do
+            [[ -d "$d/.git" ]] || continue
+            repos+=("$(basename "$d")")
+        done
+        echo ""
+        local idx=1
+        for r in "${repos[@]}"; do
+            printf "  %2d) %s\n" "$idx" "$r"
+            ((idx++))
+        done
+        echo ""
+        printf "Repo (number or name): "
+        read -r repo_pick
 
-        # Normalize bare number to TECH-XXXX
-        if [[ "$task_id" =~ ^[0-9]+$ ]]; then
-            task_id="TECH-${task_id}"
-        fi
-
-        # Skip or new — no verification needed
-        if [[ -z "$task_id" || "$task_id" == "new" ]]; then
-            break
-        fi
-
-        # Verify in ClickUp
-        if [[ -n "$CLICKUP_TOKEN" ]]; then
-            local cu_json=$(curl -s "https://api.clickup.com/api/v2/task/${task_id}?custom_task_ids=true&team_id=${CLICKUP_TEAM_ID}" \
-                -H "Authorization: $CLICKUP_TOKEN" 2>/dev/null)
-            local cu_name=$(printf '%s' "$cu_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('name',''))" 2>/dev/null)
-            local cu_status=$(printf '%s' "$cu_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status',{}).get('status',''))" 2>/dev/null)
-
-            if [[ -z "$cu_name" || "$cu_name" == "None" ]]; then
-                echo "  Could not find $task_id in ClickUp. Try again."
-                continue
-            fi
-
-            printf "  Found: %s [%s]\n" "$cu_name" "$cu_status"
-            printf "  Use this task? (y/n): "
-            read -r confirm_task
-            if [[ "$confirm_task" == "y" || "$confirm_task" == "Y" || "$confirm_task" == "" ]]; then
-                _cu_name_for_desc="$cu_name"
-                break
-            fi
-            # rejected — loop back
+        if [[ "$repo_pick" =~ ^[0-9]+$ ]] && (( repo_pick >= 1 && repo_pick <= ${#repos} )); then
+            repo_name="${repos[$repo_pick]}"
         else
-            break
+            repo_name="$repo_pick"
         fi
-    done
 
-    # Session name
-    printf "Session name (short, e.g. claude-usage-recap): "
-    read -r session_slug
-    if [[ -z "$session_slug" ]]; then
-        echo "Session name is required."
+        if [[ ! -d "$REPO_DIR/$repo_name/.git" ]]; then
+            echo "Not a git repo: $REPO_DIR/$repo_name"
+            return 1
+        fi
+    fi
+
+    # ── 2. Compute defaults ──────────────────────────────────────────────────
+    local default_session=""
+    local default_prompt="${cu_name}"
+    if [[ -n "$cu_name" ]]; then
+        default_session=$(_sanitize_session "$cu_name")
+    fi
+
+    # ── 3. Generate template ─────────────────────────────────────────────────
+    local tmpfile="/tmp/agent-start-$$.yaml"
+
+    if [[ "$agent_type" == "repo" ]]; then
+        cat > "$tmpfile" <<TMPL
+# Agent Setup — :wq to launch, :cq to cancel
+# Fields: inline comments after # are stripped.
+# Everything below "--- prompt ---" is the agent prompt (freeform, multi-line).
+
+branch: new                 # "new" or an existing branch name
+branch_type:                # feature | chore | bug (only for new branches)
+title: ${default_session}
+task_id: ${task_id}
+
+--- prompt ---
+${default_prompt}
+TMPL
+    elif [[ "$agent_type" == "general" ]]; then
+        cat > "$tmpfile" <<TMPL
+# Agent Setup — :wq to launch, :cq to cancel
+# Fields: inline comments after # are stripped.
+# Everything below "--- prompt ---" is the agent prompt (freeform, multi-line).
+
+title: ${default_session}
+task_id: ${task_id}
+dir: $(pwd)
+
+--- prompt ---
+${default_prompt}
+TMPL
+    else
+        cat > "$tmpfile" <<TMPL
+# Agent Setup — :wq to launch, :cq to cancel
+# Fields: inline comments after # are stripped.
+# Everything below "--- prompt ---" is the agent prompt (freeform, multi-line).
+
+title: ${default_session}
+task_id: ${task_id}
+
+--- prompt ---
+${default_prompt}
+TMPL
+    fi
+
+    # ── 4. Open nvim ─────────────────────────────────────────────────────────
+    nvim -c 'set ft=yaml' "$tmpfile"
+    if [[ $? -ne 0 ]]; then
+        rm -f "$tmpfile"
+        echo "Cancelled."
+        return 0
+    fi
+
+    # ── 5. Parse template ────────────────────────────────────────────────────
+    eval "$(python3 -c "
+import sys
+lines = open(sys.argv[1]).readlines()
+prompt_lines = []
+in_prompt = False
+for line in lines:
+    stripped = line.strip()
+    if stripped == '--- prompt ---':
+        in_prompt = True
+        continue
+    if in_prompt:
+        prompt_lines.append(line.rstrip())
+        continue
+    if not stripped or stripped.startswith('#'):
+        continue
+    key, _, val = stripped.partition(':')
+    key = key.strip()
+    val = val.split('#')[0].strip()
+    safe = val.replace(\"'\", \"'\\\"'\\\"'\")
+    print(f\"local P_{key}='{safe}'\")
+# Emit prompt: strip leading/trailing blank lines, preserve internal newlines
+while prompt_lines and not prompt_lines[0].strip():
+    prompt_lines.pop(0)
+while prompt_lines and not prompt_lines[-1].strip():
+    prompt_lines.pop()
+prompt_text = chr(10).join(prompt_lines)
+safe = prompt_text.replace(\"'\", \"'\\\"'\\\"'\")
+print(f\"local P_prompt='{safe}'\")
+" "$tmpfile")"
+
+    # ── 6. Validate ──────────────────────────────────────────────────────────
+    if [[ -z "$P_title" ]]; then
+        echo "Title is required. Template saved: $tmpfile"
         return 1
     fi
-    session_slug=$(_sanitize_session "$session_slug")
+    if [[ -z "$P_prompt" ]]; then
+        echo "Prompt is required. Template saved: $tmpfile"
+        return 1
+    fi
+    rm -f "$tmpfile"
+
+    local session_slug=$(_sanitize_session "$P_title")
     local session_name="zz-${session_slug}"
 
-    # Agent prompt (what the agent should work on)
-    if [[ -n "$_cu_name_for_desc" ]]; then
-        printf "Agent prompt [%s]: " "$_cu_name_for_desc"
-    else
-        printf "Agent prompt: "
-    fi
-    read -r description
-    description="${description:-$_cu_name_for_desc}"
-    if [[ -z "$description" ]]; then
-        echo "Agent prompt is required."
+    if command tmux has-session -t "$session_name" 2>/dev/null; then
+        echo "Session '$session_name' already exists."
         return 1
     fi
 
-    # Create ClickUp task if requested
-    if [[ "$task_id" == "new" ]]; then
-        printf "Task title for ClickUp [${description:0:80}]: "
-        read -r cu_title
-        cu_title="${cu_title:-${description:0:80}}"
+    # ── 7. Handle task_id: new ───────────────────────────────────────────────
+    local task_id="$P_task_id"
+    [[ "$task_id" == "None" ]] && task_id=""
 
-        # Find current sprint list ID from frontmatter
+    if [[ "$task_id" == "new" ]]; then
+        local cu_title="${P_title:0:80}"
         local sprint_file=$(ls ~/notes/work_notes/sprints/sprint_*.md 2>/dev/null | sort -t_ -k2 -n | tail -1)
         local list_id=$(python3 -c "
 import re
@@ -227,7 +326,6 @@ print(m.group(1) if m else '')
 
             if [[ -n "$task_id" && "$task_id" != "None" ]]; then
                 echo "Created $task_id: $cu_title"
-                # Add to sprint file under Uncategorized Tasks
                 [[ -n "$sprint_file" ]] && _sprint_add_task "$sprint_file" "$task_id" "[a]" "$cu_title"
             else
                 echo "Failed to create task. Continuing without TECH ID."
@@ -236,123 +334,32 @@ print(m.group(1) if m else '')
         fi
     fi
 
-    # Notes file — default to current sprint
-    local latest_sprint=$(ls ~/notes/work_notes/sprints/sprint_*.md 2>/dev/null | sort -t_ -k2 -n | tail -1)
-    local latest_sprint_rel=$(basename "$latest_sprint")
-    local notes_file="sprints/${latest_sprint_rel}"
+    # ── 8. Type dispatch ─────────────────────────────────────────────────────
     local work_dir=""
+    local type_label="$agent_type"
 
     case "$agent_type" in
         repo)
-            # List available repos
-            echo ""
-            echo " Available repos:"
-            local repos=()
-            for d in "$REPO_DIR"/*/; do
-                [[ -d "$d/.git" ]] || continue
-                repos+=("$(basename "$d")")
-            done
-            local idx=1
-            for r in "${repos[@]}"; do
-                printf "  %2d) %s\n" "$idx" "$r"
-                ((idx++))
-            done
-            echo ""
-            printf "Pick repo (number or name): "
-            read -r repo_pick
-
-            # Resolve pick to repo name
-            local repo_name=""
-            if [[ "$repo_pick" =~ ^[0-9]+$ ]] && (( repo_pick >= 1 && repo_pick <= ${#repos} )); then
-                repo_name="${repos[$repo_pick]}"
-            else
-                repo_name="$repo_pick"
-            fi
-
             local repo_path="$REPO_DIR/$repo_name"
-            if [[ ! -d "$repo_path/.git" ]]; then
-                echo "Not a git repo: $repo_path"
-                return 1
-            fi
-
-            # New branch or existing?
-            printf "New branch or existing? [n]ew / [e]xisting (default: new): "
-            read -r branch_mode
-            branch_mode="${branch_mode:-n}"
-
+            type_label="repo:${repo_name}"
             local worktree_path="${repo_path}-${session_slug}"
 
-            if [[ "$branch_mode" == "e" || "$branch_mode" == "existing" ]]; then
-                # List local + remote branches with fzf or numbered menu
-                echo ""
-                echo " Available branches:"
-                local branches=()
-                while IFS= read -r b; do
-                    branches+=("$b")
-                done < <(git -C "$repo_path" branch -a --format='%(refname:short)' \
-                    | sed 's|^origin/||' \
-                    | grep -v '^HEAD$' \
-                    | sort -u)
+            if [[ "$P_branch" == "new" ]]; then
+                # New branch — branch_type is required
+                local branch_type="$P_branch_type"
+                case "$branch_type" in
+                    feature|chore|bug) ;;
+                    f) branch_type="feature" ;;
+                    c) branch_type="chore" ;;
+                    b) branch_type="bug" ;;
+                    *)
+                        echo "branch_type is required (feature/chore/bug)."
+                        return 1
+                        ;;
+                esac
 
-                # Try fzf for fuzzy autocomplete, fall back to numbered list
-                local branch_name=""
-                if command -v fzf &>/dev/null; then
-                    branch_name=$(printf '%s\n' "${branches[@]}" \
-                        | fzf --prompt="Branch> " --height=40% --reverse)
-                else
-                    local idx=1
-                    for b in "${branches[@]}"; do
-                        printf "  %3d) %s\n" "$idx" "$b"
-                        ((idx++))
-                    done
-                    echo ""
-                    printf "Pick branch (number or name): "
-                    read -r branch_pick
-                    if [[ "$branch_pick" =~ ^[0-9]+$ ]] && (( branch_pick >= 1 && branch_pick <= ${#branches} )); then
-                        branch_name="${branches[$branch_pick]}"
-                    else
-                        branch_name="$branch_pick"
-                    fi
-                fi
-
-                if [[ -z "$branch_name" ]]; then
-                    echo "No branch selected."
-                    return 1
-                fi
-
-                echo "Fetching ${branch_name}..."
-                git -C "$repo_path" fetch origin "$branch_name" 2>/dev/null
-
-                git -C "$repo_path" worktree add "$worktree_path" "$branch_name" 2>/dev/null
-                if [[ $? -ne 0 ]]; then
-                    # Branch may only exist on remote — create tracking branch
-                    git -C "$repo_path" worktree add "$worktree_path" -b "$branch_name" "origin/${branch_name}" 2>/dev/null
-                fi
-                if [[ $? -ne 0 ]]; then
-                    echo "Failed to create worktree for branch '$branch_name'."
-                    return 1
-                fi
-
-                work_dir="$worktree_path"
-                echo "Created worktree: $worktree_path"
-                echo "Branch: $branch_name"
-            else
-                # New branch flow
-                local branch_prefix=""
-                while true; do
-                    printf "Branch type (feature/chore/bug): "
-                    read -r branch_type
-                    case "$branch_type" in
-                        feature|chore|bug) branch_prefix="$branch_type"; break ;;
-                        f) branch_prefix="feature"; break ;;
-                        c) branch_prefix="chore"; break ;;
-                        b) branch_prefix="bug"; break ;;
-                        *) echo "  Enter feature, chore, or bug (or f/c/b)" ;;
-                    esac
-                done
-
-                local branch_name="${branch_prefix}/${session_slug}"
-                [[ -n "$task_id" ]] && branch_name="${branch_prefix}/${session_slug}/${task_id}"
+                local branch_name="${branch_type}/${session_slug}"
+                [[ -n "$task_id" ]] && branch_name="${branch_type}/${session_slug}/${task_id}"
 
                 local default_branch=$(git -C "$repo_path" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||')
                 [[ -z "$default_branch" ]] && default_branch="main"
@@ -362,13 +369,28 @@ print(m.group(1) if m else '')
 
                 git -C "$repo_path" worktree add "$worktree_path" -b "$branch_name" "origin/${default_branch}" 2>/dev/null
                 if [[ $? -ne 0 ]]; then
-                    echo "Failed to create worktree at $worktree_path"
-                    echo "Branch '$branch_name' may already exist. Try a different description."
+                    echo "Failed to create worktree. Branch '$branch_name' may already exist."
                     return 1
                 fi
 
                 work_dir="$worktree_path"
-                echo "Created worktree: $worktree_path"
+                echo "Branch: $branch_name"
+            else
+                # Existing branch
+                local branch_name="$P_branch"
+                echo "Fetching ${branch_name}..."
+                git -C "$repo_path" fetch origin "$branch_name" 2>/dev/null
+
+                git -C "$repo_path" worktree add "$worktree_path" "$branch_name" 2>/dev/null
+                if [[ $? -ne 0 ]]; then
+                    git -C "$repo_path" worktree add "$worktree_path" -b "$branch_name" "origin/${branch_name}" 2>/dev/null
+                fi
+                if [[ $? -ne 0 ]]; then
+                    echo "Failed to create worktree for branch '$branch_name'."
+                    return 1
+                fi
+
+                work_dir="$worktree_path"
                 echo "Branch: $branch_name"
             fi
             ;;
@@ -378,67 +400,57 @@ print(m.group(1) if m else '')
             ;;
 
         *)
-            # General: prompt for directory
-            printf "Working directory [$(pwd)]: "
-            read -r work_dir
-            work_dir="${work_dir:-$(pwd)}"
+            work_dir="${P_dir:-$(pwd)}"
             work_dir="${work_dir/#\~/$HOME}"
             ;;
     esac
 
     if [[ ! -d "$work_dir" ]]; then
-        printf "Directory does not exist: $work_dir — create it? (y/n): "
-        read -r create_it
-        if [[ "$create_it" == "y" ]]; then
-            mkdir -p "$work_dir"
-            echo "Created: $work_dir"
-        else
-            return 1
-        fi
+        mkdir -p "$work_dir"
+        echo "Created: $work_dir"
     fi
 
-    # Check if session already exists
-    if command tmux has-session -t "$session_name" 2>/dev/null; then
-        echo "Session '$session_name' already exists."
-        return 1
-    fi
-
-    # Clean up task_id
-    [[ "$task_id" == "None" ]] && task_id=""
-
-    # Build type label
-    local type_label="$agent_type"
-    [[ "$agent_type" == "repo" && -n "$repo_name" ]] && type_label="repo:${repo_name}"
+    # ── 9. Create session + launch ───────────────────────────────────────────
+    local latest_sprint=$(ls ~/notes/work_notes/sprints/sprint_*.md 2>/dev/null | sort -t_ -k2 -n | tail -1)
+    local notes_file=""
+    [[ -n "$latest_sprint" ]] && notes_file="sprints/$(basename "$latest_sprint")"
 
     local today=$(date +%Y-%m-%d)
+    local csv_task="${P_title:0:120}"
+    _agent_append_row "active" "$csv_task" "$task_id" "$session_name" "$notes_file" "$today" "$type_label" ""
 
-    # Append row to agents.csv
-    _agent_append_row "active" "$description" "$task_id" "$session_name" "$notes_file" "$today" "$type_label"
-
-    # Create tmux session in the working directory
     command tmux new-session -d -s "$session_name" -c "$work_dir"
 
-    # Build the initial message for claude
-    local prompt="You are working on: ${description}"
-    [[ -n "$task_id" ]] && prompt="${prompt}\nClickUp: ${CLICKUP_BASE}/${task_id}"
-    [[ -n "$notes_file" ]] && prompt="${prompt}\nNotes: ~/notes/work_notes/${notes_file}"
-    prompt="${prompt}\n\nWhen you finish or get blocked, update ~/notes/work_notes/sprints/agents.csv per the instructions in ~/.claude/CLAUDE.md"
+    # Write full prompt to a file so multi-line content works
+    local prompt_file="/tmp/agent-prompt-${session_name}.md"
+    {
+        echo "You are working on:"
+        echo ""
+        echo "$P_prompt"
+        echo ""
+        [[ -n "$task_id" ]] && echo "ClickUp: ${CLICKUP_BASE}/${task_id}"
+        [[ -n "$notes_file" ]] && echo "Notes: ~/notes/work_notes/${notes_file}"
+        echo ""
+        echo "When you finish or get blocked, update ~/notes/work_notes/sprints/agents.csv per the instructions in ~/.claude/CLAUDE.md"
+    } > "$prompt_file"
 
-    # Launch claude code in the session with initial message (interactive mode)
-    command tmux send-keys -t "$session_name" "claude \"${prompt}\"" Enter
+    command tmux send-keys -t "$session_name" "claude \"\$(cat ${prompt_file})\"" Enter
 
     echo ""
     echo "Session '$session_name' created and tracked."
     [[ -n "$task_id" ]] && echo "ClickUp: ${CLICKUP_BASE}/${task_id}"
     echo "Dir: $work_dir"
 
-    # Switch to the new session
     command tmux switch-client -t "$session_name"
 }
+
+# --- agents (alias for agent-dashboard) ---
+agents() { agent-dashboard "$@"; }
 
 # --- agent-status ---
 # Dashboard: merges agents.csv with live tmux state, opens in csvlens
 agent-status() {
+    _agent_tools_reload || { agent-status "$@"; return; }
     local tmpfile="$HOME/notes/work_notes/sprints/agent-status-view.csv"
 
     python3 -c '
@@ -508,6 +520,7 @@ with open(tmpfile, "w", newline="") as f:
 # Loop through active agent sessions, switch to each one so you can interact
 # Commands per session: [enter] next  [d] done  [b] blocked  [q] quit
 agent-checkin() {
+    _agent_tools_reload || { agent-checkin "$@"; return; }
     local sessions=()
     local tasks=()
     local clickups=()
@@ -579,9 +592,28 @@ agent-checkin() {
     echo "Check-in complete."
 }
 
+# Remove a worktree directory, falling back to rm -rf if git can't handle it
+_va_remove_worktree() {
+    local wt_path="$1"
+    [[ -z "$wt_path" || ! -f "$wt_path/.git" ]] && return 1
+
+    local main_repo=$(cd "$wt_path" && git rev-parse --git-common-dir 2>/dev/null | sed 's|/\.git$||')
+    if [[ -n "$main_repo" ]]; then
+        if ! git -C "$main_repo" worktree remove "$wt_path" --force 2>/dev/null; then
+            rm -rf "$wt_path"
+            git -C "$main_repo" worktree prune 2>/dev/null
+        fi
+        echo "Worktree removed: $(basename "$wt_path")"
+    else
+        rm -rf "$wt_path"
+        echo "Worktree directory removed: $(basename "$wt_path")"
+    fi
+}
+
 # --- agent-done ---
-# Mark a tracked agent as done, optionally kill the tmux session
+# Mark a tracked agent as done, optionally kill the tmux session + worktree
 agent-done() {
+    _agent_tools_reload || { agent-done "$@"; return; }
     local session_name="$1"
 
     if [[ -z "$session_name" ]]; then
@@ -601,13 +633,11 @@ agent-done() {
         return 1
     fi
 
-    # Check if session is in a worktree
+    # Detect worktree before killing session (need pane path from tmux)
+    local worktree_path=""
     if command tmux has-session -t "$session_name" 2>/dev/null; then
         local pane_path=$(command tmux display-message -t "$session_name" -p '#{pane_current_path}' 2>/dev/null)
-        local is_worktree=false
-        local worktree_path=""
         if [[ -n "$pane_path" && -f "$pane_path/.git" ]]; then
-            is_worktree=true
             worktree_path="$pane_path"
         fi
 
@@ -617,18 +647,8 @@ agent-done() {
             command tmux kill-session -t "$session_name"
             echo "Session killed."
 
-            if $is_worktree && [[ -n "$worktree_path" ]]; then
-                printf "Remove worktree at $(basename "$worktree_path")? (y/n): "
-                read -r remove_wt
-                if [[ "$remove_wt" == "y" ]]; then
-                    local main_repo=$(cd "$worktree_path" && git rev-parse --git-common-dir 2>/dev/null | sed 's|/\.git$||')
-                    if [[ -n "$main_repo" ]]; then
-                        git -C "$main_repo" worktree remove "$worktree_path" 2>/dev/null
-                        echo "Worktree removed."
-                    else
-                        echo "Could not determine main repo. Remove manually: git worktree remove $worktree_path"
-                    fi
-                fi
+            if [[ -n "$worktree_path" ]]; then
+                _va_remove_worktree "$worktree_path"
             fi
         fi
     fi
@@ -637,6 +657,7 @@ agent-done() {
 # --- agent-track ---
 # Track an existing tmux session. Use -n <name> to rename it.
 agent-track() {
+    _agent_tools_reload || { agent-track "$@"; return; }
     local rename_to=""
 
     # Parse flags
@@ -705,7 +726,7 @@ agent-track() {
     fi
 
     local today=$(date +%Y-%m-%d)
-    _agent_append_row "active" "$description" "$task_id" "$tracked_name" "$notes_file" "$today" ""
+    _agent_append_row "active" "$description" "$task_id" "$tracked_name" "$notes_file" "$today" "" ""
 
     echo "Now tracking '$tracked_name'"
     [[ -n "$task_id" ]] && echo "ClickUp: ${CLICKUP_BASE}/${task_id}"
@@ -714,6 +735,7 @@ agent-track() {
 # --- agent-triage ---
 # Walk through all discovered (untracked) sessions and track, skip, or quit
 agent-triage() {
+    _agent_tools_reload || { agent-triage "$@"; return; }
     # Build list of tracked session names
     local tracked_sessions=()
     tracked_sessions=($(python3 -c "
@@ -933,7 +955,7 @@ print(m.group(1) if m else '')
 
                 # Save to agents.csv
                 local today=$(date +%Y-%m-%d)
-                _agent_append_row "active" "$description" "$task_id" "$tracked_name" "$sprint_rel" "$today" ""
+                _agent_append_row "active" "$description" "$task_id" "$tracked_name" "$sprint_rel" "$today" "" ""
 
                 echo "   Tracked '$tracked_name'"
                 [[ -z "$task_id" ]] && echo "   (use 'agent-link ${tracked_name}' to add a TECH ID later)"
@@ -949,6 +971,7 @@ print(m.group(1) if m else '')
 # Attach a ClickUp TECH ID to a tracked session, or create a new task
 # Usage: agent-link <session-name> [TECH-1234|new]
 agent-link() {
+    _agent_tools_reload || { agent-link "$@"; return; }
     local session_name="$1"
     local task_id="$2"
 
@@ -1046,6 +1069,7 @@ print(m.group(1) if m else '')
 # --- agent-dashboard ---
 # Interactive terminal dashboard: list agents, preview pane output, quick actions
 agent-dashboard() {
+    _agent_tools_reload || { agent-dashboard "$@"; return; }
     python3 ~/tools/agent-dashboard.py "$@"
 }
 

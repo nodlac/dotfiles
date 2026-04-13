@@ -15,8 +15,9 @@ AGENT_FILE = os.path.expanduser("~/notes/work_notes/sprints/agents.csv")
 AGENT_LOG  = os.path.expanduser("~/notes/work_notes/sprints/agent-log.md")
 
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ('done', 'blocked', 'testing', 'active', 'review'):
-        print("Usage: agent-update <done|blocked|testing|active|review> [note]")
+    valid = ('done', 'blocked', 'testing', 'active', 'review')
+    if len(sys.argv) < 2 or sys.argv[1] not in valid:
+        print(f"Usage: agent-update <{'|'.join(valid)}> [note]")
         sys.exit(1)
 
     status = sys.argv[1]
@@ -58,27 +59,40 @@ def main():
 
     # Update agents.csv
     rows = []
+    header = []
     found = False
+    is_focus = False
     with open(AGENT_FILE) as f:
-        for row in csv.reader(f):
+        reader = csv.reader(f)
+        header = next(reader)
+        rows.append(header)
+        focus_idx = header.index('Focus') if 'Focus' in header else -1
+        for row in reader:
             if len(row) > 3 and row[3] == session:
-                row[0] = status
                 found = True
+                if focus_idx >= 0 and len(row) > focus_idx and row[focus_idx] == '1':
+                    is_focus = True
+                else:
+                    row[0] = status
             rows.append(row)
 
     if not found:
         print(f"WARNING: session '{session}' not found in agents.csv — not tracked?")
         sys.exit(1)
 
-    with open(AGENT_FILE, 'w', newline='') as f:
-        csv.writer(f).writerows(rows)
+    if not is_focus:
+        with open(AGENT_FILE, 'w', newline='') as f:
+            csv.writer(f).writerows(rows)
 
-    # Append to log
+    # Append to log (always log, even in focus)
     today = datetime.now().strftime('%Y-%m-%d')
     with open(AGENT_LOG, 'a') as f:
         f.write(f"- [{today}] {session}: {note}\n")
 
-    print(f"✓ {session} → {status}")
+    if is_focus:
+        print(f"✓ {session} — focus mode (status unchanged, note logged)")
+    else:
+        print(f"✓ {session} → {status}")
 
 if __name__ == '__main__':
     main()

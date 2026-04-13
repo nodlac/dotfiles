@@ -2,6 +2,10 @@
 
 ## Commits
 - Do NOT add "Co-Authored-By" lines to commit messages.
+- When committing a large set of changes, break them into logical commits — one per concern (e.g., refactor, new feature, bug fix, config change). Do not lump unrelated changes into a single commit.
+
+## Efficiency
+- When making the same or similar edit across many files, prefer `sed` or other shell-based find-and-replace over individual Edit tool calls to avoid burning tokens on repetitive changes.
 
 ## Security
 - NEVER ask the user to paste tokens, passwords, API keys, or any secrets into the chat.
@@ -46,3 +50,7 @@ You can also append notes to `agent-log.md` directly at any time to leave progre
 | `blocked` | An **external dependency** is preventing progress — another project isn't done, infra is down, missing credentials, waiting on someone else |
 
 When in doubt between `review` and `done`, use `review`.
+
+### Focus mode
+
+If the `Focus` column for your session in `agents.csv` is `1`, the user has flagged this session for uninterrupted work. **Do not change your status.** The `agent-update` command will log your note but preserve the current status. Continue working normally — just don't try to override the Focus flag by editing `agents.csv` directly.

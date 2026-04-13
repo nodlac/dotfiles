@@ -15,6 +15,7 @@ import glob
 import json
 import urllib.request
 import urllib.error
+from datetime import date
 
 # --- Config ---
 TOKEN = os.environ.get("CLICKUP_TOKEN")
@@ -54,7 +55,7 @@ TECH_PATTERN = re.compile(r"TECH-(\d+)")
 TASK_LINE_PATTERN = re.compile(
     r"^(\s*-\s*)\[(.)\]\s+"  # prefix + marker
     r"(?:\[TECH-(\d+)\]\([^)]*\)|TECH-(\d+))"  # linked or plain TECH ID
-    r"\s*(.*?)(?:\s*\[link\]\([^)]*\))?\s*$"  # title, stripping trailing [link](url)
+    r"\s*(.*?)(?:\s*\[link\]\([^)]*\))?(?:\s*\d{4}-\d{2}-\d{2})?\s*$"  # title, stripping trailing [link](url) and date
 )
 # For NEW creation
 NEW_TASK_PATTERN = re.compile(
@@ -238,10 +239,14 @@ def get_clickup_tasks(list_id):
 
 def parse_sprint_file(filepath):
     """Parse sprint file and return dict of TECH ID -> (line_num, marker, title)."""
-    tasks = {}
     with open(filepath, "r") as f:
         lines = f.readlines()
+    return parse_sprint_file_lines(lines)
 
+
+def parse_sprint_file_lines(lines):
+    """Parse in-memory lines and return dict of TECH ID -> (line_num, marker, title)."""
+    tasks = {}
     for i, line in enumerate(lines):
         m = TASK_LINE_PATTERN.match(line)
         if m:
@@ -249,13 +254,13 @@ def parse_sprint_file(filepath):
             marker = f"[{m.group(2)}]"
             title = m.group(5).strip()
             tasks[tech_id] = {"line": i, "marker": marker, "title": title}
-
     return tasks, lines
 
 
 def format_task_line(tech_id, marker, title, indent="    "):
-    """Format a task line with TECH ID and appended link."""
-    return f"{indent}- {marker} TECH-{tech_id} {title} [link]({CLICKUP_BASE}/TECH-{tech_id})\n"
+    """Format a task line with TECH ID, appended link, and date added."""
+    today = date.today().isoformat()
+    return f"{indent}- {marker} TECH-{tech_id} {title} [link]({CLICKUP_BASE}/TECH-{tech_id}) {today}\n"
 
 
 def format_pending_line(internal_id, marker, title, indent="    "):
@@ -313,8 +318,56 @@ def _subtask_insert_idx(lines, parent_line_idx):
     return insert_after + 1
 
 
+def _update_task_title(lines, line_idx, new_title):
+    """Update the title portion of a task line, preserving indent, marker, TECH ID, link, and date."""
+    line = lines[line_idx]
+    m = TASK_LINE_PATTERN.match(line)
+    if not m:
+        return lines
+    prefix = m.group(1)       # indent + "- "
+    marker_char = m.group(2)  # single char inside []
+    tech_num = m.group(3) or m.group(4)
+
+    # Preserve trailing date if present
+    date_match = re.search(r'\s+(\d{4}-\d{2}-\d{2})\s*$', line)
+    date_str = f" {date_match.group(1)}" if date_match else ""
+
+    lines[line_idx] = (
+        f"{prefix}[{marker_char}] TECH-{tech_num} {new_title} "
+        f"[link]({CLICKUP_BASE}/TECH-{tech_num}){date_str}\n"
+    )
+    return lines
+
+
+def _get_task_indent(lines, line_idx):
+    """Return the indentation of a task line (number of leading spaces)."""
+    return len(lines[line_idx]) - len(lines[line_idx].lstrip())
+
+
+def _remove_task_block(lines, line_idx):
+    """Remove a task line and all its deeper-indented children. Returns (removed_lines, remaining_lines)."""
+    task_indent = _get_task_indent(lines, line_idx)
+    block = [lines[line_idx]]
+    j = line_idx + 1
+    while j < len(lines):
+        if lines[j].strip() == "":
+            j += 1
+            continue
+        if (len(lines[j]) - len(lines[j].lstrip())) > task_indent:
+            block.append(lines[j])
+            j += 1
+        else:
+            break
+    # Remove block from lines
+    remaining = lines[:line_idx] + lines[j:]
+    return block, remaining
+
+
 def sync_pull(filepath, clickup_tasks, local_tasks, lines):
-    """Pull new tasks and subtasks from ClickUp into the sprint file."""
+    """Pull new tasks and subtasks from ClickUp into the sprint file.
+
+    Also updates task names and re-nests/un-nests tasks when parent changes.
+    """
 
     # Build internal_id -> tech_num map for parent resolution
     id_to_tech = {}
@@ -326,6 +379,8 @@ def sync_pull(filepath, clickup_tasks, local_tasks, lines):
     new_top = []       # (tech_num, marker, title) — top-level or orphan subtasks
     # subtask insertions: (parent_line_idx, formatted_line, label)
     subtask_insertions = []
+    updated = 0
+    renested = 0
 
     for task in clickup_tasks:
         cid = task.get("custom_id")
@@ -333,22 +388,93 @@ def sync_pull(filepath, clickup_tasks, local_tasks, lines):
             continue
         tech_num = cid.replace("TECH-", "")
         cu_status = task["status"]["status"]
-        if tech_num in local_tasks or cu_status == "done":
+        cu_title = task["name"]
+        parent_id = task.get("parent")
+
+        if tech_num in local_tasks:
+            local = local_tasks[tech_num]
+
+            # --- Update title if changed ---
+            if local["title"] and cu_title != local["title"]:
+                if DRY_RUN:
+                    print(f"  [dry-run] TECH-{tech_num}: rename '{local['title']}' -> '{cu_title}'")
+                else:
+                    lines = _update_task_title(lines, local["line"], cu_title)
+                    print(f"  TECH-{tech_num}: renamed -> {cu_title}")
+                updated += 1
+
+            # --- Check nesting changes ---
+            local_indent = _get_task_indent(lines, local["line"])
+            cu_parent_tech = id_to_tech.get(parent_id) if parent_id else None
+
+            if cu_parent_tech and cu_parent_tech in local_tasks:
+                # Should be nested under parent
+                parent_indent = _get_task_indent(lines, local_tasks[cu_parent_tech]["line"])
+                expected_indent = parent_indent + 4
+                if local_indent != expected_indent:
+                    if DRY_RUN:
+                        print(f"  [dry-run] TECH-{tech_num}: would re-nest under TECH-{cu_parent_tech}")
+                    else:
+                        # Remove task block from current position
+                        block, lines = _remove_task_block(lines, local["line"])
+                        # Re-parse to get updated line numbers
+                        local_tasks, lines = parse_sprint_file_lines(lines)
+                        if cu_parent_tech in local_tasks:
+                            parent_line = local_tasks[cu_parent_tech]["line"]
+                            insert_idx = _subtask_insert_idx(lines, parent_line)
+                            # Re-indent block
+                            old_indent = len(block[0]) - len(block[0].lstrip())
+                            indent_diff = expected_indent - old_indent
+                            for bi, bline in enumerate(block):
+                                if bline.strip():
+                                    cur = len(bline) - len(bline.lstrip())
+                                    new_indent = max(0, cur + indent_diff)
+                                    block[bi] = " " * new_indent + bline.lstrip()
+                            for bi, bline in enumerate(block):
+                                lines.insert(insert_idx + bi, bline)
+                            print(f"  TECH-{tech_num}: re-nested under TECH-{cu_parent_tech}")
+                            # Re-parse again after insertion
+                            local_tasks, lines = parse_sprint_file_lines(lines)
+                    renested += 1
+            elif not parent_id and local_indent > 4:
+                # Was nested, now top-level in ClickUp — un-nest
+                if DRY_RUN:
+                    print(f"  [dry-run] TECH-{tech_num}: would un-nest to top level")
+                else:
+                    block, lines = _remove_task_block(lines, local["line"])
+                    # Re-indent to top level (4 spaces)
+                    old_indent = len(block[0]) - len(block[0].lstrip())
+                    indent_diff = 4 - old_indent
+                    for bi, bline in enumerate(block):
+                        if bline.strip():
+                            cur = len(bline) - len(bline.lstrip())
+                            new_indent = max(0, cur + indent_diff)
+                            block[bi] = " " * new_indent + bline.lstrip()
+                    # Insert into Uncategorized
+                    lines, insert_idx = _find_uncategorized_insert(lines)
+                    for bi, bline in enumerate(block):
+                        lines.insert(insert_idx + bi, bline)
+                    print(f"  TECH-{tech_num}: un-nested to top level")
+                    local_tasks, lines = parse_sprint_file_lines(lines)
+                renested += 1
+
+            continue
+
+        # New task — skip done
+        if cu_status == "done":
             continue
 
         cu_marker = STATUS_TO_MARKER.get(cu_status, "[ ]")
-        title = task["name"]
-        parent_id = task.get("parent")
 
         if parent_id:
             parent_tech = id_to_tech.get(parent_id)
             if parent_tech and parent_tech in local_tasks:
                 parent_line = local_tasks[parent_tech]["line"]
-                subtask_line = format_task_line(tech_num, cu_marker, title, "        ")
-                subtask_insertions.append((parent_line, subtask_line, tech_num, title))
+                subtask_line = format_task_line(tech_num, cu_marker, cu_title, "        ")
+                subtask_insertions.append((parent_line, subtask_line, tech_num, cu_title))
                 continue
         # No parent, or parent not in local file — goes to Uncategorized
-        new_top.append((tech_num, cu_marker, title))
+        new_top.append((tech_num, cu_marker, cu_title))
 
     pulled = 0
 
@@ -371,8 +497,12 @@ def sync_pull(filepath, clickup_tasks, local_tasks, lines):
 
     if pulled:
         print(f"  Pulled {pulled} tasks/subtasks.")
-    else:
-        print("  No new tasks to pull.")
+    if updated:
+        print(f"  Updated {updated} task name(s).")
+    if renested:
+        print(f"  Re-nested {renested} task(s).")
+    if not pulled and not updated and not renested:
+        print("  No changes to pull.")
 
     return lines
 
