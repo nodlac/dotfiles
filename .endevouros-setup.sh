@@ -207,6 +207,29 @@ enable_services() {
     
     sudo systemctl enable bluetooth 2>/dev/null || true
     sudo systemctl start bluetooth 2>/dev/null || true
+    
+    if command -v keyd &>/dev/null; then
+        echo "=== Configuring keyd for Option key as Meta ==="
+        sudo systemctl enable keyd 2>/dev/null || true
+        sudo systemctl start keyd 2>/dev/null || true
+        
+        if [ ! -f /etc/keyd/default.conf ]; then
+            sudo mkdir -p /etc/keyd
+            sudo tee /etc/keyd/default.conf > /dev/null << 'EOF'
+[ids]
+*
+
+[main]
+left-option = left-meta
+right-option = right-meta
+EOF
+            echo "  Created /etc/keyd/default.conf"
+            sudo systemctl restart keyd 2>/dev/null || true
+            echo "  Option key now works as Meta"
+        else
+            echo "  keyd config already exists"
+        fi
+    fi
 }
 
 set_default_shell() {
