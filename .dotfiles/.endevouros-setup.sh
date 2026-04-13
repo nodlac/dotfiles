@@ -190,12 +190,53 @@ setup_tmux() {
         echo "  TPM already installed"
     fi
     
-    if [ -f "$USER_HOME/.tmux.conf" ]; then
-        echo "  Installing tmux plugins..."
-        "$USER_HOME/.tmux/plugins/tpm/bin/install_plugins" || true
-    fi
+    PLUGIN_DIR="$USER_HOME/.tmux/plugins"
+    mkdir -p "$PLUGIN_DIR"
+    
+    TMUX_PLUGINS=(
+        "jimeh/tmux-themepack"
+        "tmux-plugins/tmux-resurrect"
+        "tmux-plugins/tmux-continuum"
+    )
+    
+    for plugin in "${TMUX_PLUGINS[@]}"; do
+        plugin_name=$(basename "$plugin")
+        if [ ! -d "$PLUGIN_DIR/$plugin_name" ]; then
+            echo "  Cloning $plugin..."
+            git clone --depth 1 "https://github.com/$plugin" "$PLUGIN_DIR/$plugin_name"
+        else
+            echo "  $plugin_name already installed"
+        fi
+    done
     
     echo "  tmux setup complete"
+}
+
+set_default_editor() {
+    echo "=== Setting default editor to neovim ==="
+    
+    if ! command -v nvim &>/dev/null; then
+        echo "  nvim not found, skipping"
+        return
+    fi
+    
+    export EDITOR="nvim"
+    export VISUAL="nvim"
+    
+    for rc_file in "$HOME/.zshenv" "$HOME/.bashrc" "$HOME/.profile"; do
+        if [ -f "$rc_file" ]; then
+            if ! grep -q "EDITOR.*nvim" "$rc_file" 2>/dev/null; then
+                echo 'export EDITOR="nvim"' >> "$rc_file"
+                echo 'export VISUAL="nvim"' >> "$rc_file"
+                echo "  Added to $rc_file"
+            else
+                echo "  Editor already set in $rc_file"
+            fi
+        fi
+    done
+    
+    sudo update-alternatives --set editor /usr/bin/nvim 2>/dev/null || true
+    echo "  Default editor set to nvim"
 }
 
 enable_services() {
@@ -294,6 +335,7 @@ main() {
     setup_zsh_plugins
     setup_tools
     setup_tmux
+    set_default_editor
     enable_services
     set_default_shell
     # setup_infisical
