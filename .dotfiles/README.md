@@ -12,34 +12,14 @@ git config core.bare false
 git config core.worktree ~
 ```
 
-2. Set up symlinks for config files:
-```bash
-# Symlink dotfiles to home directory
-for f in ~/.dotfiles/.*; do
-    [ -f "$f" ] || continue
-    base=$(basename "$f")
-    [ "$base" = "." ] && continue
-    [ "$base" = ".." ] && continue
-    [ "$base" = ".git" ] && continue
-    [ "$base" = ".dotfiles" ] && continue
-    ln -sf "$f" ~/"$base"
-done
-
-# Symlink .config files
-for d in ~/.dotfiles/.config/*; do
-    [ -d "$d" ] || continue
-    base=$(basename "$d")
-    mkdir -p ~/.config/"$base"
-    ln -sf "$d" ~/.config/"$base"
-done
-```
-
-3. Run the setup script:
+2. Run the setup script (automatically creates symlinks):
 ```bash
 ~/.dotfiles/.endevouros-setup.sh
 ```
 
-4. Add alias to ~/.zshrc:
+3. Restart shell or log out/in
+
+4. (Optional) Add alias to ~/.zshrc:
 ```bash
 alias eos-setup='~/.dotfiles/.endevouros-setup.sh'
 ```

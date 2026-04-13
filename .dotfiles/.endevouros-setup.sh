@@ -224,22 +224,42 @@ set_default_shell() {
     fi
 }
 
-setup_infisical() {
-    echo "=== Setting up Infisical ==="
+setup_symlinks() {
+    echo "=== Setting up symlinks ==="
+    USER_HOME=$(get_user_home)
     
-    DOMAIN="thepit.vidnagel.com"
+    for f in "$USER_HOME/.dotfiles"/.*; do
+        [ -f "$f" ] || continue
+        base=$(basename "$f")
+        [ "$base" = "." ] && continue
+        [ "$base" = ".." ] && continue
+        [ "$base" = ".git" ] && continue
+        [ "$base" = ".dotfiles" ] && continue
+        if [ -L "$USER_HOME/$base" ]; then
+            echo "  $base already linked"
+        else
+            ln -sf "$f" "$USER_HOME/$base"
+            echo "  Linked $base"
+        fi
+    done
     
-    if command -v infisical &>/dev/null; then
-        echo "  infisical CLI already installed"
-    else
-        curl -1sLf https://dl.infisical.com/shell/install.sh | sh
+    if [ -d "$USER_HOME/.dotfiles/.config" ]; then
+        for d in "$USER_HOME/.dotfiles/.config"/*; do
+            [ -d "$d" ] || continue
+            base=$(basename "$d")
+            mkdir -p "$USER_HOME/.config/$base"
+            if [ -L "$USER_HOME/.config/$base" ]; then
+                echo "  .config/$base already linked"
+            else
+                ln -sf "$d" "$USER_HOME/.config/$base"
+                echo "  Linked .config/$base"
+            fi
+        done
     fi
-    
-    echo "Run: infisical login"
-    echo "Then: infisical secrets pull --project=default --env=dev --format=dotenv -o ~/.env"
 }
 
 main() {
+    setup_symlinks
     install_yay
     install_packages
     install_aur_packages
@@ -256,9 +276,8 @@ main() {
     echo "=== Setup complete! ==="
     echo ""
     echo "Next steps:"
-    echo "  1. ln -sf ~/.dotfiles/.endevouros-setup.sh ~/.endevouros-setup.sh"
-    echo "  2. Restart shell or log out/in"
-    echo "  3. Uncomment setup_infisical() and run to set up Infisical at thepit.vidnagel.com"
+    echo "  1. Restart shell or log out/in"
+    echo "  2. Uncomment setup_infisical() and run to set up Infisical at thepit.vidnagel.com"
 }
 
 main "$@"
