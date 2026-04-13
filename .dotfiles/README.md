@@ -10,6 +10,9 @@ git clone --bare git@github.com:nodlac/dotfiles.git ~/.dotfiles
 cd ~/.dotfiles
 git config core.bare false
 git config core.worktree ~
+git config --global status.showUntrackedFiles no
+git config --global pull.rebase true
+	.ssh/
 ```
 
 2. Run the setup script (automatically creates symlinks):
