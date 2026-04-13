@@ -33,6 +33,7 @@ alias df='git --git-dir=$HOME/.dotfiles/ --work-tree=$HOME'
 alias df-quick-commit='df add -u && df status && df commit -m "quick commit" && df push'
 alias git diff="git diff --color-words"
 alias tmux-start='tmux new-session -A -s notes'
+alias eos-setup='~/.dotfiles/.endevouros-setup.sh'
 
 
 # ===========================================

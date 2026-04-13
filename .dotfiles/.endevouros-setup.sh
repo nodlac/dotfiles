@@ -2,7 +2,7 @@
 set -e
 
 echo "=== EndeavourOS Setup Script ==="
-echo "Run with: ~/.endevouros-setup.sh (without sudo, will prompt for password)"
+echo "Run with: ~/.dotfiles/.endevouros-setup.sh (without sudo, will prompt for password)"
 echo ""
 
 get_user_home() {
@@ -113,13 +113,8 @@ install_opencode() {
         echo "  opencode already installed"
     else
         mkdir -p "$USER_HOME/.opencode/bin"
-        curl -sL https://opencode.ai/install.sh | sh
+        curl -fsSL https://opencode.ai/install | sh
         echo "  opencode installed to $USER_HOME/.opencode/bin"
-    fi
-    
-    if ! grep -q ".opencode/bin" "$USER_HOME/.zshenv" 2>/dev/null; then
-        echo 'export PATH="$HOME/.opencode/bin:$PATH"' >> "$USER_HOME/.zshenv"
-        echo "  Added opencode to PATH in ~/.zshenv"
     fi
 }
 
@@ -150,45 +145,6 @@ install_npm_packages() {
         echo "  Configured npm to use $NPM_DIR"
     else
         echo "  npm not found, skipping"
-    fi
-}
-
-setup_dotfiles() {
-    echo "=== Setting up dotfiles ==="
-    USER_HOME=$(get_user_home)
-    
-    if [ -d "$USER_HOME/.dotfiles" ]; then
-        cd "$USER_HOME/.dotfiles"
-        
-        if git rev-parse --git-dir >/dev/null 2>&1; then
-            git pull
-            git config core.bare false
-            git config core.worktree "$USER_HOME"
-        fi
-    else
-        git clone git@github.com:nodlac/dotfiles.git "$USER_HOME/.dotfiles"
-        cd "$USER_HOME/.dotfiles"
-        git config core.bare false
-        git config core.worktree "$USER_HOME"
-    fi
-    
-    for f in "$USER_HOME/.dotfiles"/.*; do
-        [ -f "$f" ] || continue
-        base=$(basename "$f")
-        [ "$base" = "." ] && continue
-        [ "$base" = ".." ] && continue
-        [ "$base" = ".git" ] && continue
-        [ "$base" = ".dotfiles" ] && continue
-        ln -sf "$f" "$USER_HOME/$base"
-    done
-    
-    if [ -d "$USER_HOME/.dotfiles/.config" ]; then
-        for d in "$USER_HOME/.dotfiles/.config"/*; do
-            [ -d "$d" ] || continue
-            base=$(basename "$d")
-            mkdir -p "$USER_HOME/.config/$base"
-            ln -sf "$d" "$USER_HOME/.config/$base"
-        done
     fi
 }
 
@@ -290,7 +246,6 @@ main() {
     install_opencode
     install_pip_packages
     install_npm_packages
-    setup_dotfiles
     setup_zsh_plugins
     setup_tools
     enable_services
@@ -301,8 +256,9 @@ main() {
     echo "=== Setup complete! ==="
     echo ""
     echo "Next steps:"
-    echo "  1. Restart shell or log out/in"
-    echo "  2. Uncomment setup_infisical() and run to set up Infisical at thepit.vidnagel.com"
+    echo "  1. ln -sf ~/.dotfiles/.endevouros-setup.sh ~/.endevouros-setup.sh"
+    echo "  2. Restart shell or log out/in"
+    echo "  3. Uncomment setup_infisical() and run to set up Infisical at thepit.vidnagel.com"
 }
 
 main "$@"
