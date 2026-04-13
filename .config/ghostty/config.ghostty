@@ -1,1 +1,4 @@
+# Map Ctrl+Backspace to custom sequence (to separate from C-h)
+keybind = ctrl+backspace=text:\x1B[ctrlbackspace
+
 # Mouse toggle handled by tmux: Ctrl-Space m   

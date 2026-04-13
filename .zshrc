@@ -113,9 +113,11 @@ cursor-block() { print -n -- '\e[2 q'; }
 # Fix backspace in vi mode
 bindkey '^?' backward-delete-char
 
-# Ctrl+Backspace = delete to beginning of line
-bindkey '^H' backward-kill-line  # Ctrl+h
-bindkey '^?' backward-delete-char  # regular backspace
+# Ctrl+Backspace (via Ghostty escape sequence)
+bindkey '\e[ctrlbackspace' backward-kill-line
+
+# Ctrl+h = backward-kill-line
+bindkey '^H' backward-kill-line
 
 # ===========================================
 # Arrow Key History Search (from inputrc)
