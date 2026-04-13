@@ -1,4 +1,4 @@
-# Map Ctrl+Backspace to escape + delete (backward-kill-word)
-keybind = ctrl+backspace=text:\x1B\x7F
+# Ctrl+Backspace via Kitty Keyboard Protocol
+keybind = ctrl+backspace=text:\x1B[?2$u
 
-# Mouse toggle handled by tmux: Ctrl-Space m   
+# Mouse toggle handled by tmux: Ctrl-Space m
