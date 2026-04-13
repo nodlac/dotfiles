@@ -113,8 +113,8 @@ cursor-block() { print -n -- '\e[2 q'; }
 # Fix backspace in vi mode
 bindkey '^?' backward-delete-char
 
-# Ctrl+Backspace (via Ghostty escape sequence)
-bindkey '\e[ctrlbackspace' backward-kill-line
+# Ctrl+Backspace = escape + delete (backward-kill-word)
+bindkey '\e\x7F' backward-kill-word
 
 # Ctrl+h = backward-kill-line
 bindkey '^H' backward-kill-line
