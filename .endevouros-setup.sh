@@ -105,6 +105,24 @@ install_aur_packages() {
     fi
 }
 
+install_opencode() {
+    echo "=== Installing opencode CLI ==="
+    USER_HOME=$(get_user_home)
+    
+    if command -v opencode &>/dev/null; then
+        echo "  opencode already installed"
+    else
+        mkdir -p "$USER_HOME/.opencode/bin"
+        curl -sL https://opencode.ai/install.sh | sh
+        echo "  opencode installed to $USER_HOME/.opencode/bin"
+    fi
+    
+    if ! grep -q ".opencode/bin" "$USER_HOME/.zshenv" 2>/dev/null; then
+        echo 'export PATH="$HOME/.opencode/bin:$PATH"' >> "$USER_HOME/.zshenv"
+        echo "  Added opencode to PATH in ~/.zshenv"
+    fi
+}
+
 install_pip_packages() {
     echo "=== Installing Python packages ==="
     
@@ -178,7 +196,10 @@ setup_zsh_plugins() {
     echo "=== Setting up zsh plugins ==="
     USER_HOME=$(get_user_home)
     
+    mkdir -p "$USER_HOME/.zsh"
+    
     if [ ! -d "$USER_HOME/.zsh/zsh-history-substring-search" ]; then
+        echo "  Cloning zsh-history-substring-search..."
         git clone https://github.com/zsh-users/zsh-history-substring-search "$USER_HOME/.zsh/zsh-history-substring-search"
     else
         echo "  zsh-history-substring-search already cloned"
@@ -266,6 +287,7 @@ main() {
     install_yay
     install_packages
     install_aur_packages
+    install_opencode
     install_pip_packages
     install_npm_packages
     setup_dotfiles
