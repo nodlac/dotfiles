@@ -173,6 +173,31 @@ setup_tools() {
     fi
 }
 
+setup_tmux() {
+    echo "=== Setting up tmux ==="
+    USER_HOME=$(get_user_home)
+    
+    if ! command -v tmux &>/dev/null; then
+        echo "  tmux not found, skipping"
+        return
+    fi
+    
+    TPM_DIR="$USER_HOME/.tmux/plugins/tpm"
+    if [ ! -d "$TPM_DIR" ]; then
+        echo "  Installing TPM..."
+        git clone https://github.com/tmux-plugins/tpm "$TPM_DIR"
+    else
+        echo "  TPM already installed"
+    fi
+    
+    if [ -f "$USER_HOME/.tmux.conf" ]; then
+        echo "  Installing tmux plugins..."
+        "$USER_HOME/.tmux/plugins/tpm/bin/install_plugins" || true
+    fi
+    
+    echo "  tmux setup complete"
+}
+
 enable_services() {
     echo "=== Enabling services ==="
     
@@ -268,6 +293,7 @@ main() {
     install_npm_packages
     setup_zsh_plugins
     setup_tools
+    setup_tmux
     enable_services
     set_default_shell
     # setup_infisical
