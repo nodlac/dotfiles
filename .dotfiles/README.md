@@ -4,15 +4,12 @@ This is a bare git repository with worktree set to home directory.
 
 ## Fresh Install Steps
 
-1. Clone the repository as a bare repo with worktree:
+1. Clone the repository:
 ```bash
 git clone --bare git@github.com:nodlac/dotfiles.git ~/.dotfiles
-cd ~/.dotfiles
-git config core.bare false
-git config core.worktree ~
 ```
 
-2. Run the setup script (automatically creates symlinks):
+2. Run the setup script (configures git and creates symlinks):
 ```bash
 ~/.dotfiles/.endevouros-setup.sh
 ```

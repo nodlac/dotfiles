@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 set -e
 
-echo "=== EndeavourOS Setup Script ==="
-echo "Run with: ~/.dotfiles/.endevouros-setup.sh (without sudo, will prompt for password)"
-echo ""
-
 get_user_home() {
     if [ -n "$SUDO_USER" ]; then
         getent passwd "$SUDO_USER" | cut -d: -f6
@@ -12,6 +8,31 @@ get_user_home() {
         echo "$HOME"
     fi
 }
+
+init_dotfiles_repo() {
+    USER_HOME=$(get_user_home)
+    DOTFILES_DIR="$USER_HOME/.dotfiles"
+    
+    if [ -d "$DOTFILES_DIR/.git" ]; then
+        CURRENT_WORKTREE=$(git --git-dir="$DOTFILES_DIR" config core.worktree 2>/dev/null || true)
+        CURRENT_BARE=$(git --git-dir="$DOTFILES_DIR" config core.bare 2>/dev/null || true)
+        
+        if [ "$CURRENT_WORKTREE" != "$USER_HOME" ] || [ "$CURRENT_BARE" != "false" ]; then
+            echo "=== Configuring dotfiles git repo ==="
+            git --git-dir="$DOTFILES_DIR" config core.bare false
+            git --git-dir="$DOTFILES_DIR" config core.worktree "$USER_HOME"
+            git --git-dir="$DOTFILES_DIR" config status.showUntrackedFiles no
+            echo "  Configured: bare=false, worktree=$USER_HOME, untracked=hidden"
+            echo ""
+        fi
+    fi
+}
+
+init_dotfiles_repo
+
+echo "=== EndeavourOS Setup Script ==="
+echo "Run with: ~/.dotfiles/.endevouros-setup.sh (without sudo, will prompt for password)"
+echo ""
 
 install_yay() {
     echo "=== Installing yay (AUR helper) ==="
@@ -321,6 +342,21 @@ setup_symlinks() {
                 echo "  Linked .config/$base"
             fi
         done
+    fi
+}
+
+setup_dotfiles() {
+    echo "=== Configuring dotfiles git repo ==="
+    USER_HOME=$(get_user_home)
+    
+    DOTFILES_DIR="$USER_HOME/.dotfiles"
+    if [ -d "$DOTFILES_DIR/.git" ]; then
+        git --git-dir="$DOTFILES_DIR" config core.bare false
+        git --git-dir="$DOTFILES_DIR" config core.worktree "$USER_HOME"
+        git --git-dir="$DOTFILES_DIR" config status.showUntrackedFiles no
+        echo "  Dotfiles configured (bare=false, worktree=$USER_HOME, untracked=hidden)"
+    else
+        echo "  $DOTFILES_DIR not a git repo, skipping"
     fi
 }
 
