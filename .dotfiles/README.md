@@ -16,14 +16,19 @@ git config core.bare false
 git config core.worktree ~
 ```
 
-3. Run the setup script (creates symlinks):
+3. Checkout files to home directory:
+```bash
+git checkout
+```
+
+4. Run the setup script (creates symlinks):
 ```bash
 ~/.dotfiles/.endevouros-setup.sh
 ```
 
-4. Restart shell or log out/in
+5. Restart shell or log out/in
 
-4. (Optional) Add alias to ~/.zshrc:
+5. (Optional) Add alias to ~/.zshrc:
 ```bash
 alias eos-setup='~/.dotfiles/.endevouros-setup.sh'
 ```
