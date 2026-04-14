@@ -130,7 +130,7 @@ install_opencode() {
     echo "=== Installing opencode CLI ==="
     USER_HOME=$(get_user_home)
     
-    if command -v opencode &>/dev/null; then
+    if [ -f "$USER_HOME/.opencode/bin/opencode" ] || [ -f "/usr/local/bin/opencode" ]; then
         echo "  opencode already installed"
     else
         mkdir -p "$USER_HOME/.opencode/bin"
