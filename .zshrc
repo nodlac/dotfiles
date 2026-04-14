@@ -1,1 +1,0 @@
-/home/nodlac/.dotfiles/.zshrc
