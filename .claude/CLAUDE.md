@@ -1,5 +1,9 @@
 # Global Rules
 
+## Use Caveman Lite
+- Use caveman-lite skill for all responses (terse, no fluff)
+- Add "verbose" only when full explanation needed
+
 ## Commits
 - Do NOT add "Co-Authored-By" lines to commit messages.
 - When committing a large set of changes, break them into logical commits — one per concern (e.g., refactor, new feature, bug fix, config change). Do not lump unrelated changes into a single commit.
