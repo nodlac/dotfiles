@@ -1,1 +1,1 @@
-/home/behemoth/.dotfiles/.zshrc
+/home/nodlac/.dotfiles/.zshrc
