@@ -314,8 +314,9 @@ set_default_shell() {
 setup_symlinks() {
     echo "=== Setting up symlinks ==="
     USER_HOME=$(get_user_home)
+    DOTFILES_DIR="$USER_HOME/.dotfiles"
     
-    for f in "$USER_HOME/.dotfiles"/.*; do
+    for f in "$DOTFILES_DIR"/.*; do
         [ -f "$f" ] || continue
         base=$(basename "$f")
         [ "$base" = "." ] && continue
@@ -325,13 +326,13 @@ setup_symlinks() {
         if [ -L "$USER_HOME/$base" ]; then
             echo "  $base already linked"
         else
-            ln -sf "$f" "$USER_HOME/$base"
+            ln -sf "$DOTFILES_DIR/$base" "$USER_HOME/$base"
             echo "  Linked $base"
         fi
     done
     
-    if [ -d "$USER_HOME/.dotfiles/.config" ]; then
-        for d in "$USER_HOME/.dotfiles/.config"/*; do
+    if [ -d "$DOTFILES_DIR/.config" ]; then
+        for d in "$DOTFILES_DIR/.config"/*; do
             [ -d "$d" ] || continue
             base=$(basename "$d")
             mkdir -p "$USER_HOME/.config/$base"
@@ -340,6 +341,29 @@ setup_symlinks() {
             else
                 ln -sf "$d" "$USER_HOME/.config/$base"
                 echo "  Linked .config/$base"
+            fi
+        done
+    fi
+    
+    if [ -d "$DOTFILES_DIR/tools" ]; then
+        if [ -L "$USER_HOME/tools" ]; then
+            echo "  tools already linked"
+        else
+            ln -sf "$DOTFILES_DIR/tools" "$USER_HOME/tools"
+            echo "  Linked tools"
+        fi
+    fi
+    
+    if [ -d "$DOTFILES_DIR/.zsh" ]; then
+        mkdir -p "$USER_HOME/.zsh"
+        for f in "$DOTFILES_DIR/.zsh"/*; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            if [ -L "$USER_HOME/.zsh/$base" ]; then
+                echo "  .zsh/$base already linked"
+            else
+                ln -sf "$f" "$USER_HOME/.zsh/$base"
+                echo "  Linked .zsh/$base"
             fi
         done
     fi
