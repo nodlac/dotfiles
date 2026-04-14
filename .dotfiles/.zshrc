@@ -30,9 +30,10 @@ alias python='python3'
 alias ls='ls --color=auto'
 alias grep='grep --color=auto'
 alias df='git --git-dir=$HOME/.dotfiles/ --work-tree=$HOME'
-alias df-quick-commit='df add -u && df status && df commit -m "quick commit" && df push'
+alias df-quick-commit='df add -u && df status && df commit && df push'
 alias git diff="git diff --color-words"
 alias tmux-start='tmux new-session -A -s notes'
+alias tmux='tmux new-session -A -s settings'
 alias eos-setup='~/.dotfiles/.endevouros-setup.sh'
 
 
@@ -112,10 +113,6 @@ cursor-beam() { print -n -- '\e[6 q'; }
 cursor-block() { print -n -- '\e[2 q'; }
 
 # Fix backspace in vi mode
-bindkey '^?' backward-delete-char
-
-# Ctrl+h = backward-kill-line
-bindkey '^H' backward-kill-line
 
 # ===========================================
 # Arrow Key History Search (from inputrc)

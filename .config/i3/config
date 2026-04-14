@@ -223,6 +223,12 @@ bindsym $mod+j focus down
 bindsym $mod+k focus up
 bindsym $mod+l focus right
 
+# Ctrl+Shift+hjkl for focus
+bindsym Control+Shift+h focus left
+bindsym Control+Shift+j focus down
+bindsym Control+Shift+k focus up
+bindsym Control+Shift+l focus right
+
 # alternatively, you can use the cursor keys:
 bindsym $mod+Left focus left
 bindsym $mod+Down focus down
@@ -341,6 +347,7 @@ assign [class="(?i)brave"] $ws3
 
 # automatic set focus new window if it opens on another workspace than the current:
 for_window [class=ghostty] focus
+for_window [class=ghostty] border pixel 1
 for_window [class=(?i)brave] focus
 for_window [class=Thunar] focus
 # for_window [class=Thunderbird] focus
@@ -506,9 +513,9 @@ set $yellowbrown    #e1b700
 
 # define colors for windows:
 #class                      border      bground     text        indicator   child_border
-client.focused              $lightblue  $darkblue   $white      $mediumgrey $mediumgrey
-client.unfocused            $darkblue   $darkblue   $grey       $darkgrey   $darkgrey
-client.focused_inactive     $darkblue   $darkblue   $grey       $black      $black
+client.focused              $lightblue  $darkblue   $white      $lightblue  $lightblue
+client.unfocused            $darkblue  $darkblue   $grey       $darkblue  $darkblue
+client.focused_inactive     $darkblue  $darkblue   $grey       $darkblue  $darkblue
 client.urgent               $urgentred  $urgentred  $white      $yellowbrown    $yellowbrown
 
 ############################################
