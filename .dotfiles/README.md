@@ -9,12 +9,19 @@ This is a bare git repository with worktree set to home directory.
 git clone --bare git@github.com:nodlac/dotfiles.git ~/.dotfiles
 ```
 
-2. Run the setup script (configures git and creates symlinks):
+2. Configure git to use home directory as worktree:
+```bash
+cd ~/.dotfiles
+git config core.bare false
+git config core.worktree ~
+```
+
+3. Run the setup script (creates symlinks):
 ```bash
 ~/.dotfiles/.endevouros-setup.sh
 ```
 
-3. Restart shell or log out/in
+4. Restart shell or log out/in
 
 4. (Optional) Add alias to ~/.zshrc:
 ```bash
