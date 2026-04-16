@@ -616,12 +616,13 @@ exec_always --no-startup-id setxkbmap -option caps:escape
 #####################################
 exec_always --no-startup-id bash -c 'source ~/.env && [ "$KEYBOARD_TYPE" = "mac" ] && sleep 0.5 && xmodmap ~/.xmodmap-remap'
 
+
 #####################################
-# TMUX Workspaces
+# TMUX Workspaces (creates session if missing)
 #####################################
-bindsym $mod+s exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t settings || tmux new-session -s settings"   
-bindsym $mod+n exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t notes || tmux new-session -s notes"   
-bindsym $mod+g exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t goals-app || tmux new-session -s goals-app"
-bindsym $mod+a exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t AOC || tmux new-session -s AOC"
-bindsym $mod+b exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t BD || tmux new-session -s BD"
-bindsym $mod+p exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t POS || tmux new-session -s POS"
+bindsym $mod+s exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t settings || tmux new-session -d -s settings && tmux switch-client -t settings"
+bindsym $mod+n exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t notes || tmux new-session -d -s notes && tmux switch-client -t notes"
+bindsym $mod+g exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t goals-app || tmux new-session -d -s goals-app && tmux switch-client -t goals-app"
+bindsym $mod+a exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t AOC || tmux new-session -d -s AOC && tmux switch-client -t AOC"
+bindsym $mod+b exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t BD || tmux new-session -d -s BD && tmux switch-client -t BD"
+bindsym $mod+p exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t POS || tmux new-session -d -s POS && tmux switch-client -t POS"

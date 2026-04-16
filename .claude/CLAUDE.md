@@ -1,9 +1,5 @@
 # Global Rules
 
-## Use Caveman Lite
-- Use caveman-lite skill for all responses (terse, no fluff)
-- Add "verbose" only when full explanation needed
-
 ## Commits
 - Do NOT add "Co-Authored-By" lines to commit messages.
 - When committing a large set of changes, break them into logical commits — one per concern (e.g., refactor, new feature, bug fix, config change). Do not lump unrelated changes into a single commit.
@@ -16,6 +12,10 @@
 - NEVER save or log secrets in any file that is tracked by git or visible in conversation history.
 - Access credentials only through environment variables (e.g. `$CLICKUP_TOKEN`). If a credential is missing, tell the user which env var to set in `~/.env` and have them do it themselves.
 - Do NOT use the Anthropic API key (`$ANTHROPIC_API_KEY`) for any purpose unless the user explicitly asks you to. This includes making API calls, building test scripts, or any other use.
+
+## Session Init
+
+At the start of every new conversation, before doing any other work, invoke the `/caveman` skill to activate caveman mode. Do this silently — no need to announce it or wait for user confirmation.
 
 # Agent Instructions
 
@@ -57,4 +57,4 @@ When in doubt between `review` and `done`, use `review`.
 
 ### Focus mode
 
-If the `Focus` column for your session in `agents.csv` is `1`, the user has flagged this session for uninterrupted work. **Do not change your status.** The `agent-update` command will log your note but preserve the current status. Continue working normally — just don't try to override the Focus flag by editing `agents.csv` directly.
+If the `Focus` column for your session in `agents.csv` is `1`, the user has flagged this session for uninterrupted work. Operate normally — update status via `agent-update` as usual. Just don't alter the `Focus` flag itself by editing `agents.csv` directly.

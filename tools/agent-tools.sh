@@ -121,16 +121,31 @@ with open('$AGENT_FILE', 'w', newline='') as f:
 
 # --- agent-start ---
 # Opens nvim with a pre-populated template, parses it, creates tmux session + worktree
-# Usage: agent-start
+# Usage: agent-start [--task TECH-XXXX] [--type repo|analytics|general]
 agent-start() {
     _agent_tools_reload || { agent-start "$@"; return; }
+    # ── 0. Parse flags ──────────────────────────────────────────────────────
+    local _flag_task="" _flag_type=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --task)  _flag_task="$2"; shift 2 ;;
+            --type)  _flag_type="$2"; shift 2 ;;
+            *)       shift ;;
+        esac
+    done
+
     # ── 1. Pre-questions ────────────────────────────────────────────────────
     local task_id="" cu_name="" cu_status=""
     local agent_type="" repo_name=""
 
     # Task ID
-    printf "Task ID (number, TECH-XXXX, 'new', enter to skip): "
-    read -r task_id
+    if [[ -n "$_flag_task" ]]; then
+        task_id="$_flag_task"
+        echo "Task ID: $task_id"
+    else
+        printf "Task ID (number, TECH-XXXX, 'new', enter to skip): "
+        read -r task_id
+    fi
 
     if [[ "$task_id" =~ ^[0-9]+$ ]]; then
         task_id="TECH-${task_id}"
@@ -152,8 +167,12 @@ agent-start() {
     fi
 
     # Type
-    printf "Type — [r]epo  [a]nalytics  [g]eneral: "
-    read -r agent_type
+    if [[ -n "$_flag_type" ]]; then
+        agent_type="$_flag_type"
+    else
+        printf "Type — [r]epo  [a]nalytics  [g]eneral: "
+        read -r agent_type
+    fi
     case "$agent_type" in
         r|repo)      agent_type="repo" ;;
         a|analytics) agent_type="analytics" ;;
@@ -187,6 +206,19 @@ agent-start() {
             echo "Not a git repo: $REPO_DIR/$repo_name"
             return 1
         fi
+
+        # Branch type
+        printf "Branch type — [f]eature  [c]hore  [b]ug: "
+        read -r branch_type_input
+        case "$branch_type_input" in
+            f|feature) branch_type_input="feature" ;;
+            c|chore)   branch_type_input="chore" ;;
+            b|bug)     branch_type_input="bug" ;;
+            *)
+                echo "Invalid branch type."
+                return 1
+                ;;
+        esac
     fi
 
     # ── 2. Compute defaults ──────────────────────────────────────────────────
@@ -206,7 +238,7 @@ agent-start() {
 # Everything below "--- prompt ---" is the agent prompt (freeform, multi-line).
 
 branch: new                 # "new" or an existing branch name
-branch_type:                # feature | chore | bug (only for new branches)
+branch_type: ${branch_type_input}
 title: ${default_session}
 task_id: ${task_id}
 
@@ -291,16 +323,33 @@ print(f\"local P_prompt='{safe}'\")
     rm -f "$tmpfile"
 
     local session_slug=$(_sanitize_session "$P_title")
-    local session_name="zz-${session_slug}"
 
-    if command tmux has-session -t "$session_name" 2>/dev/null; then
-        echo "Session '$session_name' already exists."
-        return 1
+    # ── 6b. Warn if task_id already claimed by another agent ────────────────
+    local task_id="$P_task_id"
+    [[ "$task_id" == "None" ]] && task_id=""
+
+    if [[ -n "$task_id" && "$task_id" != "new" ]]; then
+        local existing_session=$(python3 -c "
+import csv, sys
+tid = sys.argv[1]
+with open('$AGENT_FILE') as f:
+    for row in csv.reader(f):
+        if len(row) > 3 and row[2] == tid and row[0] not in ('done', ''):
+            print(row[3])
+            break
+" "$task_id" 2>/dev/null)
+        if [[ -n "$existing_session" ]]; then
+            echo "WARNING: $task_id already has active agent '$existing_session'"
+            printf "Continue anyway? [y/N] "
+            read -r _confirm
+            if [[ "$_confirm" != [yY] ]]; then
+                echo "Aborted."
+                return 0
+            fi
+        fi
     fi
 
     # ── 7. Handle task_id: new ───────────────────────────────────────────────
-    local task_id="$P_task_id"
-    [[ "$task_id" == "None" ]] && task_id=""
 
     if [[ "$task_id" == "new" ]]; then
         local cu_title="${P_title:0:80}"
@@ -367,10 +416,21 @@ print(m.group(1) if m else '')
                 echo "Fetching latest ${default_branch}..."
                 git -C "$repo_path" fetch origin "$default_branch" 2>/dev/null
 
-                git -C "$repo_path" worktree add "$worktree_path" -b "$branch_name" "origin/${default_branch}" 2>/dev/null
-                if [[ $? -ne 0 ]]; then
-                    echo "Failed to create worktree. Branch '$branch_name' may already exist."
-                    return 1
+                # Check for existing worktree — by path or by branch name
+                local existing_wt=$(git -C "$repo_path" worktree list --porcelain 2>/dev/null | \
+                    awk -v branch="$branch_name" '/^worktree /{wt=$2} /^branch refs\/heads\//{if($2=="refs/heads/"branch) print wt}')
+
+                if [[ -n "$existing_wt" && -d "$existing_wt" ]]; then
+                    echo "Reusing existing worktree at $existing_wt"
+                    worktree_path="$existing_wt"
+                elif [[ -d "$worktree_path/.git" ]]; then
+                    echo "Worktree exists at $worktree_path, reusing."
+                else
+                    git -C "$repo_path" worktree add "$worktree_path" -B "$branch_name" "origin/${default_branch}" 2>/dev/null
+                    if [[ $? -ne 0 ]]; then
+                        echo "Failed to create worktree for branch '$branch_name'."
+                        return 1
+                    fi
                 fi
 
                 work_dir="$worktree_path"
@@ -410,6 +470,47 @@ print(m.group(1) if m else '')
         echo "Created: $work_dir"
     fi
 
+    # ── 8b. Build session name: z-{type_short}-{slug} ────────────────────────
+    local type_short=""
+    case "$agent_type" in
+        repo)      type_short="${repo_name//./-}" ;;
+        analytics) type_short="analytics" ;;
+        *)         type_short="general" ;;
+    esac
+    local session_name="z-${type_short}-${session_slug}"
+
+    if command tmux has-session -t "$session_name" 2>/dev/null; then
+        echo "Session '$session_name' already exists."
+        return 1
+    fi
+
+    # ── 8c. Assign dev server port for repo agents ─────────────────────────
+    local agent_port=""
+    if [[ "$agent_type" == "repo" ]]; then
+        agent_port=$(python3 -c "
+import subprocess, re
+# Ports 9000-9010 reserved for dev servers
+used = set()
+try:
+    out = subprocess.check_output(['lsof', '-iTCP:9000-9010', '-sTCP:LISTEN', '-nP'], stderr=subprocess.DEVNULL, text=True)
+    for line in out.splitlines():
+        m = re.search(r':(\d+)\s', line)
+        if m:
+            used.add(int(m.group(1)))
+except Exception:
+    pass
+for p in range(9000, 9011):
+    if p not in used:
+        print(p)
+        break
+" 2>/dev/null)
+        if [[ -z "$agent_port" ]]; then
+            echo "No available ports in 9000-9010."
+            return 1
+        fi
+        echo "Dev server port: $agent_port"
+    fi
+
     # ── 9. Create session + launch ───────────────────────────────────────────
     local latest_sprint=$(ls ~/notes/work_notes/sprints/sprint_*.md 2>/dev/null | sort -t_ -k2 -n | tail -1)
     local notes_file=""
@@ -421,6 +522,12 @@ print(m.group(1) if m else '')
 
     command tmux new-session -d -s "$session_name" -c "$work_dir"
 
+    # Run npm install + npm start in a second pane for repo agents (-d = don't focus)
+    if [[ "$agent_type" == "repo" && -n "$agent_port" ]]; then
+        command tmux split-window -d -t "$session_name" -h -c "$work_dir" \
+            "npm install && PORT=$agent_port npm start; echo 'Dev server exited. Press enter to close.'; read"
+    fi
+
     # Write full prompt to a file so multi-line content works
     local prompt_file="/tmp/agent-prompt-${session_name}.md"
     {
@@ -430,6 +537,7 @@ print(m.group(1) if m else '')
         echo ""
         [[ -n "$task_id" ]] && echo "ClickUp: ${CLICKUP_BASE}/${task_id}"
         [[ -n "$notes_file" ]] && echo "Notes: ~/notes/work_notes/${notes_file}"
+        [[ -n "$agent_port" ]] && echo "Dev server: http://localhost:${agent_port} (running in right pane)"
         echo ""
         echo "When you finish or get blocked, update ~/notes/work_notes/sprints/agents.csv per the instructions in ~/.claude/CLAUDE.md"
     } > "$prompt_file"
@@ -439,9 +547,84 @@ print(m.group(1) if m else '')
     echo ""
     echo "Session '$session_name' created and tracked."
     [[ -n "$task_id" ]] && echo "ClickUp: ${CLICKUP_BASE}/${task_id}"
+    [[ -n "$agent_port" ]] && echo "Dev server: http://localhost:${agent_port}"
     echo "Dir: $work_dir"
 
     command tmux switch-client -t "$session_name"
+}
+
+# --- agent-serve ---
+# Add a dev server pane to an existing agent session
+# Usage: agent-serve [session-name]  — omit to pick from active repo agents
+agent-serve() {
+    _agent_tools_reload || { agent-serve "$@"; return; }
+    local session="$1"
+
+    if [[ -z "$session" ]]; then
+        # List active repo agents
+        local sessions=$(python3 -c "
+import csv
+with open('$AGENT_FILE') as f:
+    for row in csv.reader(f):
+        if len(row) > 6 and row[0] in ('active','review','testing') and row[6].startswith('repo:'):
+            print(row[3])
+" 2>/dev/null)
+        if [[ -z "$sessions" ]]; then
+            echo "No active repo agents."
+            return 0
+        fi
+        echo "Active repo agents:"
+        local i=1
+        local picks=()
+        while IFS= read -r s; do
+            printf "  %2d) %s\n" "$i" "$s"
+            picks+=("$s")
+            ((i++))
+        done <<< "$sessions"
+        printf "Pick (number or name): "
+        read -r pick
+        if [[ "$pick" =~ ^[0-9]+$ ]] && (( pick >= 1 && pick <= ${#picks[@]} )); then
+            session="${picks[$pick]}"
+        else
+            session="$pick"
+        fi
+    fi
+
+    if ! command tmux has-session -t "$session" 2>/dev/null; then
+        echo "Session '$session' not found."
+        return 1
+    fi
+
+    # Find work dir from tmux
+    local work_dir=$(command tmux display-message -t "$session" -p '#{pane_current_path}' 2>/dev/null)
+
+    # Allocate port
+    local agent_port=$(python3 -c "
+import subprocess, re
+used = set()
+try:
+    out = subprocess.check_output(['lsof', '-iTCP:9000-9010', '-sTCP:LISTEN', '-nP'], stderr=subprocess.DEVNULL, text=True)
+    for line in out.splitlines():
+        m = re.search(r':(\d+)\s', line)
+        if m:
+            used.add(int(m.group(1)))
+except Exception:
+    pass
+for p in range(9000, 9011):
+    if p not in used:
+        print(p)
+        break
+" 2>/dev/null)
+
+    if [[ -z "$agent_port" ]]; then
+        echo "No available ports in 9000-9010."
+        return 1
+    fi
+
+    command tmux split-window -t "$session" -h -c "$work_dir" \
+        "npm install && PORT=$agent_port npm start; echo 'Dev server exited. Press enter to close.'; read"
+
+    echo "Dev server starting on http://localhost:${agent_port} in session '$session'"
 }
 
 # --- agents (alias for agent-dashboard) ---

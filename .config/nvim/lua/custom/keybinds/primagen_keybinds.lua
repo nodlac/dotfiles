@@ -74,4 +74,18 @@ vim.keymap.set('n', '<leader>rn', 'grn')
 vim.keymap.set('n', '<leader>ss', '<cmd>w | botright split | terminal sprint-sync<CR>', {
     desc = 'Sprint sync (save, sync ClickUp, pull changes)'
 })
+
+-- agent-start: extract TECH-XXXX from current line, launch agent in tmux popup
+vim.keymap.set('n', '<leader>sa', function()
+  local line = vim.api.nvim_get_current_line()
+  local task_id = line:match('(TECH%-[0-9]+)')
+  local cmd = 'agent-start'
+  if task_id then
+    cmd = cmd .. ' --task ' .. task_id
+  end
+  vim.cmd('w')
+  local tmux_cmd = 'tmux display-popup -E -w 80% -h 70% "source ~/tools/agent-tools.sh && ' .. cmd .. '; echo; echo Press enter to close; read"'
+  vim.fn.jobstart(tmux_cmd, { detach = true })
+end, { desc = 'Start agent from task line' })
+
 return {}

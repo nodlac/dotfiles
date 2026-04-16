@@ -76,18 +76,18 @@ on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
     alt-shift-9 = 'move-node-to-workspace 9'
     alt-shift-0 = 'move-node-to-workspace 10'
 
-    # Quick links to common sessions
-    alt-s = ['workspace 2', 'exec-and-forget sleep 0.1 && tmux switch-client -t settings']
-    alt-y = ['workspace 2', 'exec-and-forget sleep 0.1 && tmux switch-client -t v-web']
-    alt-u = ['workspace 2', 'exec-and-forget sleep 0.1 && tmux switch-client -t v-backend']
-    alt-i = ['workspace 2', 'exec-and-forget sleep 0.1 && tmux switch-client -t v-apple']
-    alt-o = ['workspace 2', 'exec-and-forget sleep 0.1 && tmux switch-client -t v-android']
-    alt-p = ['workspace 2', 'exec-and-forget sleep 0.1 && tmux switch-client -t v-hoover']
-    alt-c = ['workspace 2', 'exec-and-forget sleep 0.1 && tmux switch-client -t v-control-center']
-    alt-n = ['workspace 2', 'exec-and-forget sleep 0.1 && tmux switch-client -t notes']
-    alt-d = ['workspace 2', 'exec-and-forget sleep 0.1 && tmux switch-client -t v-psql']
-    alt-t = ['workspace 2', 'exec-and-forget sleep 0.1 && tmux switch-client -t tunnels']
-    alt-a = ['workspace 2', 'exec-and-forget sleep 0.1 && tmux switch-client -t agents']
+    # Quick links to common sessions (creates session if it doesn't exist)
+    alt-s = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t settings || tmux new-session -d -s settings && tmux switch-client -t settings)']
+    alt-y = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-web || tmux new-session -d -s v-web && tmux switch-client -t v-web)']
+    alt-u = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-backend || tmux new-session -d -s v-backend && tmux switch-client -t v-backend)']
+    alt-i = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-apple || tmux new-session -d -s v-apple && tmux switch-client -t v-apple)']
+    alt-o = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-android || tmux new-session -d -s v-android && tmux switch-client -t v-android)']
+    alt-p = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-hoover || tmux new-session -d -s v-hoover && tmux switch-client -t v-hoover)']
+    alt-c = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-control-center || tmux new-session -d -s v-control-center && tmux switch-client -t v-control-center)']
+    alt-n = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t notes || tmux new-session -d -s notes && tmux switch-client -t notes)']
+    alt-d = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-psql || tmux new-session -d -s v-psql && tmux switch-client -t v-psql)']
+    alt-t = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t tunnels || tmux new-session -d -s tunnels && tmux switch-client -t tunnels)']
+    alt-a = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t agents || tmux new-session -d -s agents && tmux switch-client -t agents)']
 
     alt-shift-c = 'reload-config'
 

@@ -33,7 +33,7 @@ MARKER_TO_STATUS = {
     "[>]": "qa",
     "[T]": "qa",           # testing required — maps to qa in ClickUp
     "[x]": "done",
-    "[c]": "closed (caution!)",  # closed in ClickUp and moves to Done section locally
+    "[c]": "Closed",  # closed in ClickUp and moves to Done section locally
     "[a]": "in progress",  # agent running counts as in progress in ClickUp
     "[d]": "__delete__",   # delete from ClickUp and remove line
 }
@@ -245,7 +245,7 @@ def parse_sprint_file(filepath):
 
 
 def parse_sprint_file_lines(lines):
-    """Parse in-memory lines and return dict of TECH ID -> (line_num, marker, title)."""
+    """Parse in-memory lines and return dict of TECH ID -> (line_num, marker, title, indent)."""
     tasks = {}
     for i, line in enumerate(lines):
         m = TASK_LINE_PATTERN.match(line)
@@ -253,7 +253,8 @@ def parse_sprint_file_lines(lines):
             tech_id = m.group(3) or m.group(4)
             marker = f"[{m.group(2)}]"
             title = m.group(5).strip()
-            tasks[tech_id] = {"line": i, "marker": marker, "title": title}
+            indent = len(line) - len(line.lstrip())
+            tasks[tech_id] = {"line": i, "marker": marker, "title": title, "indent": indent}
     return tasks, lines
 
 
@@ -394,8 +395,8 @@ def sync_pull(filepath, clickup_tasks, local_tasks, lines):
         if tech_num in local_tasks:
             local = local_tasks[tech_num]
 
-            # --- Update title if changed ---
-            if local["title"] and cu_title != local["title"]:
+            # --- Update title if changed or missing (bare TECH-XXXX) ---
+            if cu_title and (not local["title"] or cu_title != local["title"]):
                 if DRY_RUN:
                     print(f"  [dry-run] TECH-{tech_num}: rename '{local['title']}' -> '{cu_title}'")
                 else:
@@ -552,7 +553,7 @@ def sync_push(local_tasks, clickup_tasks):
         if tech_num not in cu_lookup:
             fetched = get_task_by_tech_num(tech_num)
             if not fetched:
-                if target_status in ("done", "closed (caution!)"):
+                if target_status in ("done", "Closed"):
                     # Task removed from ClickUp but marked done/closed locally — just count it
                     print(f"  TECH-{tech_num}: not in ClickUp, treating as done")
                     done_tech_ids.append(f"TECH-{tech_num}")
@@ -575,7 +576,7 @@ def sync_push(local_tasks, clickup_tasks):
             if result:
                 print(f"  TECH-{tech_num}: {cu_status} -> {target_status}")
                 pushed += 1
-                if target_status in ("done", "closed (caution!)"):
+                if target_status in ("done", "Closed"):
                     done_tech_ids.append(f"TECH-{tech_num}")
 
     if pushed == 0:
@@ -584,6 +585,95 @@ def sync_push(local_tasks, clickup_tasks):
         print(f"  Pushed {pushed} status updates.")
 
     return done_tech_ids, deleted_tech_nums
+
+
+def _derive_local_parents(local_tasks):
+    """Derive parent relationships from indentation in local sprint file.
+
+    Returns dict of tech_num -> parent_tech_num (or None for top-level tasks).
+    A task's parent is the nearest preceding task with strictly lower indent.
+    """
+    # Sort tasks by line number to walk in file order
+    sorted_tasks = sorted(local_tasks.items(), key=lambda x: x[1]["line"])
+    parents = {}
+    # Stack of (tech_num, indent) — ancestors in current nesting
+    stack = []
+
+    for tech_num, info in sorted_tasks:
+        indent = info["indent"]
+        # Pop stack until we find a task with strictly less indent
+        while stack and stack[-1][1] >= indent:
+            stack.pop()
+        parents[tech_num] = stack[-1][0] if stack else None
+        stack.append((tech_num, indent))
+
+    return parents
+
+
+def sync_push_parents(local_tasks, clickup_tasks):
+    """Push local nesting changes to ClickUp.
+
+    Compares parent relationships derived from local indentation against
+    ClickUp's parent field. Updates ClickUp when they differ.
+    """
+    # Build lookups
+    cu_lookup = {}
+    id_to_tech = {}
+    tech_to_id = {}
+    for task in clickup_tasks:
+        custom_id = task.get("custom_id")
+        if custom_id:
+            tech_num = custom_id.replace("TECH-", "")
+            cu_lookup[tech_num] = task
+            id_to_tech[task["id"]] = tech_num
+            tech_to_id[tech_num] = task["id"]
+
+    local_parents = _derive_local_parents(local_tasks)
+    pushed = 0
+
+    for tech_num, local_parent_tech in local_parents.items():
+        # Skip tasks marked for deletion
+        local_marker = local_tasks[tech_num]["marker"]
+        if MARKER_TO_STATUS.get(local_marker) == "__delete__":
+            continue
+
+        # Need ClickUp task to compare
+        if tech_num not in cu_lookup:
+            continue
+
+        cu_task = cu_lookup[tech_num]
+        cu_parent_id = cu_task.get("parent")
+        cu_parent_tech = id_to_tech.get(cu_parent_id) if cu_parent_id else None
+
+        if local_parent_tech == cu_parent_tech:
+            continue
+
+        # Local parent must exist in ClickUp to set it
+        if local_parent_tech and local_parent_tech not in tech_to_id:
+            print(f"  SKIP TECH-{tech_num}: local parent TECH-{local_parent_tech} not in ClickUp")
+            continue
+
+        new_parent_id = tech_to_id[local_parent_tech] if local_parent_tech else None
+        direction = (
+            f"nest under TECH-{local_parent_tech}" if local_parent_tech
+            else "un-nest to top level"
+        )
+
+        if DRY_RUN:
+            print(f"  [dry-run] TECH-{tech_num}: would {direction}")
+            pushed += 1
+        else:
+            result = api("PUT", f"/task/{cu_task['id']}", {"parent": new_parent_id})
+            if result:
+                print(f"  TECH-{tech_num}: {direction}")
+                pushed += 1
+            else:
+                print(f"  TECH-{tech_num}: failed to {direction}")
+
+    if pushed == 0:
+        print("  No parent changes to push.")
+    else:
+        print(f"  Pushed {pushed} parent update(s).")
 
 
 def check_agent_closeout(done_tech_ids):
@@ -1350,6 +1440,11 @@ def main(target_sprint_num=None):
     # Push status changes
     print("PUSH:")
     done_tech_ids, deleted_tech_nums = sync_push(local_tasks, clickup_tasks)
+    print()
+
+    # Push parent/nesting changes
+    print("PUSH PARENTS:")
+    sync_push_parents(local_tasks, clickup_tasks)
     print()
 
     # Remove [d] lines from the sprint file
