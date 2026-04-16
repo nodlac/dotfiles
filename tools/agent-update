@@ -11,8 +11,9 @@ If no note is given on the command line, opens an nvim popup
 import csv, subprocess, sys, os, tempfile
 from datetime import datetime
 
-AGENT_FILE = os.path.expanduser("~/notes/work_notes/sprints/agents.csv")
-AGENT_LOG  = os.path.expanduser("~/notes/work_notes/sprints/agent-log.md")
+AGENT_DIR  = os.environ.get("AGENT_DIR", os.path.expanduser("~/.agents"))
+AGENT_FILE = os.environ.get("AGENT_FILE", os.path.join(AGENT_DIR, "agents.csv"))
+AGENT_LOG  = os.environ.get("AGENT_LOG", os.path.join(AGENT_DIR, "agent-log.md"))
 
 def main():
     valid = ('done', 'blocked', 'testing', 'active', 'review')

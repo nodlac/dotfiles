@@ -21,13 +21,12 @@ At the start of every new conversation, before doing any other work, invoke the 
 
 ## Files you can read and write
 
-- **Agent tracker**: `~/notes/work_notes/sprints/agents.csv` — your row is identified by your tmux session name
-- **Agent log**: `~/notes/work_notes/sprints/agent-log.md` — append progress notes here any time
-- **Current sprint**: the highest-numbered file matching `~/notes/work_notes/sprints/sprint_*.md` — read this for task context, acceptance criteria, and related work
+- **Agent tracker**: `$AGENT_FILE` (default `~/.agents/agents.csv`) — your row is identified by your tmux session name
+- **Agent log**: `$AGENT_LOG` (default `~/.agents/agent-log.md`) — append progress notes here any time
 
 ## Session tracking
 
-At the start of a new conversation, check if the current tmux session is already tracked in `~/notes/work_notes/sprints/agents.csv`. If it is not tracked, ask the user if they'd like to track it before proceeding with the task.
+At the start of a new conversation, check if the current tmux session is already tracked in agents.csv. If it is not tracked, ask the user if they'd like to track it before proceeding with the task.
 
 ## Check-in protocol
 
