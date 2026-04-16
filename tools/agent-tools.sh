@@ -553,6 +553,44 @@ for p in range(9000, 9011):
     command tmux switch-client -t "$session_name"
 }
 
+# --- agent-resume ---
+# Find agent sessions without claude running and relaunch from saved prompt
+# Usage: agent-resume [session-name]  — omit to resume all missing
+agent-resume() {
+    _agent_tools_reload || { agent-resume "$@"; return; }
+    local target="$1"
+    local resumed=0
+
+    local sessions=""
+    if [[ -n "$target" ]]; then
+        sessions="$target"
+    else
+        sessions=$(for s in $(command tmux ls -F '#S' 2>/dev/null | grep '^z-'); do
+            has_claude=$(command tmux list-panes -t "$s" -F '#{pane_current_command}' 2>/dev/null | grep -c claude)
+            [[ "$has_claude" -eq 0 ]] && echo "$s"
+        done)
+    fi
+
+    if [[ -z "$sessions" ]]; then
+        echo "All agent sessions have claude running."
+        return 0
+    fi
+
+    while IFS= read -r s; do
+        [[ -z "$s" ]] && continue
+        local prompt_file="/tmp/agent-prompt-${s}.md"
+        if [[ ! -f "$prompt_file" ]]; then
+            echo "SKIP $s — no prompt file at $prompt_file"
+            continue
+        fi
+        command tmux send-keys -t "$s" "claude \"\$(cat ${prompt_file})\"" Enter
+        echo "→ resumed $s"
+        ((resumed++))
+    done <<< "$sessions"
+
+    echo "Resumed $resumed session(s)."
+}
+
 # --- agent-serve ---
 # Add a dev server pane to an existing agent session
 # Usage: agent-serve [session-name]  — omit to pick from active repo agents
