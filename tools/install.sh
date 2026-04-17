@@ -1,5 +1,6 @@
 #!/usr/bin/env zsh
-# install.sh — set up work-scripts on a new machine
+# install.sh — set up dotfiles-managed tools on a new machine
+# (agent-tools is installed separately — see ~/.mac-setup.sh / ~/.eos-setup.sh)
 set -e
 
 SCRIPTS_DIR="${0:A:h}"
@@ -12,7 +13,7 @@ red() { print -P "%F{red}$*%f"; }
 info() { print "  $*"; }
 
 echo ""
-green "==> work-scripts install"
+green "==> dotfiles/tools install"
 echo ""
 
 # ── 1. Check dependencies ─────────────────────────────────────────────────────
@@ -20,7 +21,6 @@ echo ""
 echo "Checking dependencies..."
 missing=()
 command -v python3 &>/dev/null || missing+=(python3)
-command -v tmux    &>/dev/null || missing+=(tmux)
 command -v git     &>/dev/null || missing+=(git)
 
 if (( ${#missing} )); then
@@ -28,7 +28,7 @@ if (( ${#missing} )); then
     info "Install with: brew install ${missing[*]}"
     exit 1
 fi
-info "python3 $(python3 --version 2>&1 | awk '{print $2}')  tmux $(tmux -V | awk '{print $2}')  git $(git --version | awk '{print $3}')"
+info "python3 $(python3 --version 2>&1 | awk '{print $2}')  git $(git --version | awk '{print $3}')"
 
 # ── 2. ~/.local/bin ───────────────────────────────────────────────────────────
 
@@ -59,8 +59,6 @@ install_symlink() {
 }
 
 install_wrapper  sprint-sync    "python3 $SCRIPTS_DIR/sprint-sync.py"
-install_wrapper  agent-dashboard "python3 $SCRIPTS_DIR/agent-dashboard.py"
-install_symlink  agent-update   "$SCRIPTS_DIR/agent-update"
 install_symlink  clickup-open   "$SCRIPTS_DIR/clickup-open.sh"
 
 # ── 3. Ensure ~/.local/bin is in PATH ─────────────────────────────────────────
@@ -74,42 +72,7 @@ else
     info "~/.local/bin already in $ZSHRC"
 fi
 
-# ── 4. Source agent-tools.sh in .zshrc ───────────────────────────────────────
-
-echo ""
-echo "Checking agent-tools..."
-TOOLS_LINE="source $SCRIPTS_DIR/agent-tools.sh"
-if ! grep -qF "agent-tools.sh" "$ZSHRC" 2>/dev/null; then
-    echo "\n# work-scripts agent tools\n$TOOLS_LINE" >> "$ZSHRC"
-    info "added agent-tools.sh source to $ZSHRC"
-else
-    info "agent-tools.sh already sourced in $ZSHRC"
-fi
-
-# ── 5. Notes directory structure ─────────────────────────────────────────────
-
-echo ""
-echo "Checking notes structure..."
-SPRINTS_DIR="$HOME/notes/work_notes/sprints"
-mkdir -p "$SPRINTS_DIR"
-
-AGENTS_CSV="$SPRINTS_DIR/agents.csv"
-if [[ ! -f "$AGENTS_CSV" ]]; then
-    echo "Status,Task,ClickUp,Session,Notes,Started,Type" > "$AGENTS_CSV"
-    info "created $AGENTS_CSV"
-else
-    info "agents.csv exists"
-fi
-
-AGENT_LOG="$SPRINTS_DIR/agent-log.md"
-if [[ ! -f "$AGENT_LOG" ]]; then
-    echo "# Agent Log\n" > "$AGENT_LOG"
-    info "created $AGENT_LOG"
-else
-    info "agent-log.md exists"
-fi
-
-# ── 6. ~/.env template ────────────────────────────────────────────────────────
+# ── 4. ~/.env template ────────────────────────────────────────────────────────
 
 echo ""
 echo "Checking ~/.env..."
@@ -134,7 +97,7 @@ else
     info "~/.env already has CLICKUP_TOKEN"
 fi
 
-# ── 7. Claude Code permissions ────────────────────────────────────────────────
+# ── 5. Claude Code permissions ────────────────────────────────────────────────
 
 echo ""
 echo "Setting up Claude Code permissions..."

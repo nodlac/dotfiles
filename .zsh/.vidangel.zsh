@@ -349,7 +349,7 @@ vidangel-celery-worker() {
 ##########################################################
 # Agent task management
 ##########################################################
-source ~/tools/agent-tools.sh
+source ~/repos/agent-tools/agent-tools.sh
 
 ##########################################################
 # Work exports
