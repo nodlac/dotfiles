@@ -33,10 +33,10 @@ At the start of a new conversation, check if the current tmux session is already
 When you **finish**, get **blocked**, or are **ready for review**, run:
 
 ```
-~/tools/agent-update done    "brief summary of what you accomplished"
-~/tools/agent-update review  "stuck on X / ready for review of Y"
-~/tools/agent-update testing "what needs to be tested and how"
-~/tools/agent-update blocked "what external thing is preventing progress"
+agent-update done    "brief summary of what you accomplished"
+agent-update review  "stuck on X / ready for review of Y"
+agent-update testing "what needs to be tested and how"
+agent-update blocked "what external thing is preventing progress"
 ```
 
 This auto-detects your tmux session name and updates both `agents.csv` and `agent-log.md`.

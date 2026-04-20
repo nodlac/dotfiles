@@ -84,7 +84,7 @@ vim.keymap.set('n', '<leader>sa', function()
     cmd = cmd .. ' --task ' .. task_id
   end
   vim.cmd('w')
-  local tmux_cmd = 'tmux display-popup -E -w 80% -h 70% "source ~/tools/agent-tools.sh && ' .. cmd .. '; echo; echo Press enter to close; read"'
+  local tmux_cmd = 'tmux display-popup -E -w 80% -h 70% "source ~/repos/agent-tools/agent-tools.sh && ' .. cmd .. '; echo; echo Press enter to close; read"'
   vim.fn.jobstart(tmux_cmd, { detach = true })
 end, { desc = 'Start agent from task line' })
 
