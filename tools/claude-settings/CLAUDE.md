@@ -38,3 +38,14 @@ You can also append notes to `agent-log.md` directly at any time to leave progre
 | `blocked` | An **external dependency** is preventing progress — another project isn't done, infra is down, missing credentials, waiting on someone else |
 
 When in doubt between `review` and `done`, use `review`.
+
+### Testing checklist
+
+When moving to `review` or `testing`, write a testing checklist to `~/notes/work_notes/testing-checklists/<TECH-ID>-<short-slug>.md` (or `<session-name>.md` if no task ID). Keep it focused on what a human should verify, not a replay of what you did. Include:
+
+- Golden-path steps (the feature working end-to-end)
+- Edge cases and regressions you were worried about
+- Any known gaps or caveats
+- Relevant URLs, test accounts, or env flags
+
+One checklist per task. Update it (don't create a new one) if the task already has a file.
