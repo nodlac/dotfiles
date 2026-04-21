@@ -57,9 +57,9 @@ TASK_LINE_PATTERN = re.compile(
     r"(?:\[TECH-(\d+)\]\([^)]*\)|TECH-(\d+))"  # linked or plain TECH ID
     r"\s*(.*?)(?:\s*\[link\]\([^)]*\))?(?:\s*\d{4}-\d{2}-\d{2})?\s*$"  # title, stripping trailing [link](url) and date
 )
-# For NEW creation
+# For NEW creation (immediate) and NEW_XX (deferred until sprint >= XX)
 NEW_TASK_PATTERN = re.compile(
-    r"^(\s*-\s*)\[(.)\]\s+NEW\s+(.*)"
+    r"^(\s*-\s*)\[(.)\]\s+NEW(?:_(\d+))?\s+(.*)"
 )
 # For tasks created but awaiting custom_id assignment
 PENDING_TASK_PATTERN = re.compile(
@@ -279,7 +279,7 @@ def _find_uncategorized_insert(lines):
     Creates the section if missing. Returns (lines, insert_idx)."""
     for i, line in enumerate(lines):
         if line.strip() == "# Uncategorized Tasks":
-            return lines, i + 1
+            return lines, i
 
     # Section missing — create it after frontmatter / legend
     insert_idx = 0
@@ -337,6 +337,18 @@ def _update_task_title(lines, line_idx, new_title):
         f"{prefix}[{marker_char}] TECH-{tech_num} {new_title} "
         f"[link]({CLICKUP_BASE}/TECH-{tech_num}){date_str}\n"
     )
+    return lines
+
+
+def _update_task_marker(lines, line_idx, new_marker):
+    """Replace the [X] marker of a task line, preserving everything else."""
+    line = lines[line_idx]
+    m = TASK_LINE_PATTERN.match(line)
+    if not m:
+        return lines
+    # new_marker is like "[x]"; strip the brackets, keep just the char
+    mchar = new_marker.strip("[]")
+    lines[line_idx] = re.sub(r'\[.\]', f'[{mchar}]', line, count=1)
     return lines
 
 
@@ -496,13 +508,54 @@ def sync_pull(filepath, clickup_tasks, local_tasks, lines):
             print(f"    {marker} TECH-{tech_num} {title}")
             pulled += 1
 
+    # ── Off-list drift: fetch tasks not in the sprint's list and
+    # reconcile title + (conservative) status. This covers tasks that
+    # were rolled over in markdown but never attached to the sprint
+    # list in ClickUp.
+    cu_ids = {
+        (task.get("custom_id") or "").replace("TECH-", "")
+        for task in clickup_tasks if task.get("custom_id")
+    }
+    off_list = [tn for tn in local_tasks if tn not in cu_ids]
+    off_list_updates = 0
+    for tech_num in off_list:
+        remote = get_task_by_tech_num(tech_num)
+        if not remote:
+            continue
+        local = local_tasks[tech_num]
+        cu_title = remote.get("name") or ""
+        cu_status = remote.get("status", {}).get("status", "")
+
+        # Title drift
+        if cu_title and cu_title != local["title"]:
+            if DRY_RUN:
+                print(f"  [dry-run] TECH-{tech_num}: rename '{local['title']}' -> '{cu_title}' (off-list)")
+            else:
+                lines = _update_task_title(lines, local["line"], cu_title)
+                print(f"  TECH-{tech_num}: renamed (off-list) -> {cu_title}")
+            off_list_updates += 1
+
+        # Status drift — only adopt ClickUp terminal states when local
+        # is still open, to avoid clobbering in-flight local changes
+        # that PUSH hasn't flushed yet.
+        if cu_status in ("done", "Closed") and local["marker"] in ("[ ]", "[/]"):
+            new_marker = "[x]" if cu_status == "done" else "[c]"
+            if DRY_RUN:
+                print(f"  [dry-run] TECH-{tech_num}: local {local['marker']} -> {new_marker} (closed in ClickUp)")
+            else:
+                lines = _update_task_marker(lines, local["line"], new_marker)
+                print(f"  TECH-{tech_num}: adopted ClickUp status {cu_status} -> {new_marker}")
+            off_list_updates += 1
+
     if pulled:
         print(f"  Pulled {pulled} tasks/subtasks.")
     if updated:
         print(f"  Updated {updated} task name(s).")
     if renested:
         print(f"  Re-nested {renested} task(s).")
-    if not pulled and not updated and not renested:
+    if off_list_updates:
+        print(f"  Off-list drift: {off_list_updates} update(s).")
+    if not pulled and not updated and not renested and not off_list_updates:
         print("  No changes to pull.")
 
     return lines
@@ -737,7 +790,8 @@ def check_agent_closeout(done_tech_ids):
 
 
 def sync_create(filepath, lines, clickup_tasks=None):
-    """Create tasks in ClickUp for NEW lines."""
+    """Create tasks in ClickUp for NEW lines. NEW_XX deferred until sprint >= XX."""
+    current_sprint = get_sprint_number(filepath)
     list_id = get_clickup_list_id(filepath)
 
     if not list_id:
@@ -759,10 +813,17 @@ def sync_create(filepath, lines, clickup_tasks=None):
 
         indent = m.group(1)
         marker = f"[{m.group(2)}]"
-        title = m.group(3).strip()
+        gate_sprint = m.group(3)  # None for NEW, "30" for NEW_30
+        title = m.group(4).strip()
 
         if not title:
             continue
+
+        # Deferred: NEW_30 waits until current sprint >= 30
+        if gate_sprint is not None:
+            gate_num = int(gate_sprint)
+            if current_sprint is None or current_sprint < gate_num:
+                continue  # not yet — leave line as-is
 
         target_status = MARKER_TO_STATUS.get(marker, "to do")
         indent_clean = indent.rstrip("- ") or "    "
@@ -1344,7 +1405,7 @@ tags:
 clickup_list_id: "{list_id}"
 ---
 <!-- [ ] todo  [/] in progress  [a] agent  [~] blocked/waiting  [>] qa  [!] urgent  [x] done  [d] delete
-NEW create  PENDING:<id> awaiting custom ID -->
+NEW create  NEW_XX deferred until sprint >= XX  PENDING:<id> awaiting custom ID -->
 
 # Uncategorized Tasks
 
