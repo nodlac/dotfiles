@@ -36,6 +36,7 @@ MARKER_TO_STATUS = {
     "[c]": "Closed",  # closed in ClickUp and moves to Done section locally
     "[a]": "in progress",  # agent running counts as in progress in ClickUp
     "[d]": "__delete__",   # delete from ClickUp and remove line
+    "[p]": "__push_next__", # attach to next sprint list in ClickUp, remove line locally
 }
 
 STATUS_TO_MARKER = {
@@ -561,9 +562,9 @@ def sync_pull(filepath, clickup_tasks, local_tasks, lines):
     return lines
 
 
-def sync_push(local_tasks, clickup_tasks):
+def sync_push(local_tasks, clickup_tasks, current_sprint_num=None):
     """Push local status changes to ClickUp.
-    Returns (done_tech_ids, deleted_tech_nums).
+    Returns (done_tech_ids, deleted_tech_nums, pushed_next_tech_nums).
     """
     cu_lookup = {}
     for task in clickup_tasks:
@@ -574,11 +575,47 @@ def sync_push(local_tasks, clickup_tasks):
     pushed = 0
     done_tech_ids = []
     deleted_tech_nums = []
+    pushed_next_tech_nums = []
+    next_list_id = None  # lazy-resolved on first [p]
 
     for tech_num, local in local_tasks.items():
         local_marker = local["marker"]
         target_status = MARKER_TO_STATUS.get(local_marker)
         if not target_status:
+            continue
+
+        if target_status == "__push_next__":
+            if next_list_id is None:
+                if current_sprint_num is None:
+                    print(f"  SKIP TECH-{tech_num}: current sprint number unknown")
+                    continue
+                nl_id, nl_name = find_clickup_sprint_list(current_sprint_num + 1)
+                if not nl_id:
+                    print(f"  SKIP TECH-{tech_num}: no ClickUp list for Sprint {current_sprint_num + 1}")
+                    continue
+                next_list_id = nl_id
+                print(f"  Next sprint list: {nl_name} ({nl_id})")
+
+            if tech_num not in cu_lookup:
+                fetched = get_task_by_tech_num(tech_num)
+                if fetched:
+                    cu_lookup[tech_num] = fetched
+            if tech_num not in cu_lookup:
+                print(f"  SKIP TECH-{tech_num}: not in ClickUp (cannot attach to next sprint)")
+                continue
+
+            if DRY_RUN:
+                print(f"  [dry-run] TECH-{tech_num}: push to next sprint list")
+                pushed_next_tech_nums.append(tech_num)
+                pushed += 1
+            else:
+                result = api("POST", f"/list/{next_list_id}/task/{cu_lookup[tech_num]['id']}")
+                if result is not None:
+                    print(f"  TECH-{tech_num}: pushed to next sprint list")
+                    pushed_next_tech_nums.append(tech_num)
+                    pushed += 1
+                else:
+                    print(f"  TECH-{tech_num}: push-next failed")
             continue
 
         if target_status == "__delete__":
@@ -637,7 +674,7 @@ def sync_push(local_tasks, clickup_tasks):
     else:
         print(f"  Pushed {pushed} status updates.")
 
-    return done_tech_ids, deleted_tech_nums
+    return done_tech_ids, deleted_tech_nums, pushed_next_tech_nums
 
 
 def _derive_local_parents(local_tasks):
@@ -1404,7 +1441,7 @@ tags:
   - sprints
 clickup_list_id: "{list_id}"
 ---
-<!-- [ ] todo  [/] in progress  [a] agent  [~] blocked/waiting  [>] qa  [!] urgent  [x] done  [d] delete
+<!-- [ ] todo  [/] in progress  [a] agent  [~] blocked/waiting  [>] qa  [!] urgent  [x] done  [d] delete  [p] push to next sprint
 NEW create  NEW_XX deferred until sprint >= XX  PENDING:<id> awaiting custom ID -->
 
 # Uncategorized Tasks
@@ -1500,7 +1537,9 @@ def main(target_sprint_num=None):
 
     # Push status changes
     print("PUSH:")
-    done_tech_ids, deleted_tech_nums = sync_push(local_tasks, clickup_tasks)
+    done_tech_ids, deleted_tech_nums, pushed_next_tech_nums = sync_push(
+        local_tasks, clickup_tasks, current_sprint_num=sprint_num
+    )
     print()
 
     # Push parent/nesting changes
@@ -1508,8 +1547,9 @@ def main(target_sprint_num=None):
     sync_push_parents(local_tasks, clickup_tasks)
     print()
 
-    # Remove [d] lines from the sprint file
-    if deleted_tech_nums and not DRY_RUN:
+    # Remove [d] and [p] lines from the sprint file
+    purge_nums = set(deleted_tech_nums) | set(pushed_next_tech_nums)
+    if purge_nums and not DRY_RUN:
         with open(filepath) as f:
             current_lines = f.readlines()
         kept = []
@@ -1517,8 +1557,9 @@ def main(target_sprint_num=None):
             m = TASK_LINE_PATTERN.match(line)
             if m:
                 tech_num = m.group(3) or m.group(4)
-                if tech_num in deleted_tech_nums:
-                    print(f"  Removed TECH-{tech_num} from sprint file.")
+                if tech_num in purge_nums:
+                    tag = "deleted" if tech_num in deleted_tech_nums else "pushed to next sprint"
+                    print(f"  Removed TECH-{tech_num} from sprint file ({tag}).")
                     continue
             kept.append(line)
         with open(filepath, "w") as f:
