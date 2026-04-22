@@ -24,10 +24,6 @@ At the start of every new conversation, before doing any other work, invoke the 
 - **Agent tracker**: `$AGENT_FILE` (default `~/.agents/agents.csv`) — your row is identified by your tmux session name
 - **Agent log**: `$AGENT_LOG` (default `~/.agents/agent-log.md`) — append progress notes here any time
 
-## Session tracking
-
-At the start of a new conversation, check if the current tmux session is already tracked in agents.csv. If it is not tracked, ask the user if they'd like to track it before proceeding with the task.
-
 ## Check-in protocol
 
 When you **finish**, get **blocked**, or are **ready for review**, run:
