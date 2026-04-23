@@ -341,6 +341,114 @@ def _update_task_title(lines, line_idx, new_title):
     return lines
 
 
+def _find_section_range(lines, heading):
+    """Return (start_idx, end_idx) bounding lines of a top-level section.
+    start_idx = line of heading, end_idx = first line of the next top-level
+    heading (or len(lines) if this is the last section). (None, None) if
+    section missing."""
+    start = None
+    for i, line in enumerate(lines):
+        if line.rstrip() == heading:
+            start = i
+            break
+    if start is None:
+        return None, None
+    for j in range(start + 1, len(lines)):
+        stripped = lines[j].lstrip()
+        # Top-level heading only — "# " but not "## "
+        if stripped.startswith("# ") and not stripped.startswith("## "):
+            return start, j
+    return start, len(lines)
+
+
+def _find_future_projects_insert(lines):
+    """Return (lines, insert_idx) for new items in # Future Projects.
+    Creates the section after # Uncategorized Tasks if missing."""
+    start, _ = _find_section_range(lines, "# Future Projects")
+    if start is not None:
+        return lines, start + 1
+
+    # Insert after # Uncategorized Tasks section (or after frontmatter/legend)
+    ustart, uend = _find_section_range(lines, "# Uncategorized Tasks")
+    insert_idx = uend if uend is not None else 0
+    if insert_idx == 0:
+        # No Uncategorized — put after frontmatter / legend
+        fence_count = 0
+        for i, line in enumerate(lines):
+            if line.strip() == "---":
+                fence_count += 1
+                if fence_count == 2:
+                    insert_idx = i + 1
+                    break
+        while insert_idx < len(lines) and lines[insert_idx].strip().startswith("<!--"):
+            insert_idx += 1
+
+    # Ensure a blank line before the new heading
+    if insert_idx > 0 and lines[insert_idx - 1].strip() != "":
+        lines[insert_idx:insert_idx] = ["\n"]
+        insert_idx += 1
+    lines[insert_idx:insert_idx] = ["# Future Projects\n", "\n"]
+    return lines, insert_idx + 1
+
+
+def organize_future_projects(lines):
+    """Move `- [ ] NEW_XX` lines to # Future Projects; move matured TECH-XXXX
+    lines inside # Future Projects back to # Uncategorized Tasks."""
+    moved_to_future = 0
+    moved_out = 0
+
+    # Pass 1: collect NEW_XX lines outside # Future Projects
+    fstart, fend = _find_section_range(lines, "# Future Projects")
+    to_future = []
+    for i, line in enumerate(lines):
+        if fstart is not None and fstart <= i < fend:
+            continue
+        m = NEW_TASK_PATTERN.match(line)
+        if m and m.group(3):  # gate_sprint set → NEW_XX
+            to_future.append(i)
+
+    # Remove in reverse order to preserve indices
+    blocks = []
+    for i in sorted(to_future, reverse=True):
+        blocks.append(lines.pop(i))
+    blocks.reverse()
+
+    if blocks:
+        lines, insert_idx = _find_future_projects_insert(lines)
+        for b in blocks:
+            lines.insert(insert_idx, b)
+            insert_idx += 1
+        moved_to_future = len(blocks)
+
+    # Pass 2: matured TECH lines inside # Future Projects → back to Uncategorized
+    fstart, fend = _find_section_range(lines, "# Future Projects")
+    if fstart is not None:
+        matured = []
+        for i in range(fstart + 1, fend):
+            if TASK_LINE_PATTERN.match(lines[i]):
+                matured.append(i)
+        matured_lines = []
+        for i in sorted(matured, reverse=True):
+            matured_lines.append(lines.pop(i))
+        matured_lines.reverse()
+
+        if matured_lines:
+            lines, insert_idx = _find_uncategorized_insert(lines)
+            for m in matured_lines:
+                lines.insert(insert_idx, m)
+                insert_idx += 1
+            moved_out = len(matured_lines)
+
+    tag = "[dry-run] " if DRY_RUN else ""
+    if moved_to_future:
+        print(f"  {tag}Moved {moved_to_future} NEW_XX line(s) to # Future Projects.")
+    if moved_out:
+        print(f"  {tag}Promoted {moved_out} matured task(s) from # Future Projects.")
+    if not moved_to_future and not moved_out:
+        print("  No changes.")
+    return lines
+
+
 def _update_task_marker(lines, line_idx, new_marker):
     """Replace the [X] marker of a task line, preserving everything else."""
     line = lines[line_idx]
@@ -1504,10 +1612,22 @@ def main(target_sprint_num=None):
         with open(filepath, "w") as f:
             f.writelines(lines)
 
-    # Create NEW tasks
+    # Park deferred NEW_XX tasks under # Future Projects
+    print("ORGANIZE FUTURE:")
+    lines = organize_future_projects(lines)
+    print()
+    if not DRY_RUN:
+        with open(filepath, "w") as f:
+            f.writelines(lines)
+
+    # Create NEW tasks (matured NEW_XX get their TECH line in place, which
+    # is inside # Future Projects — the next organize pass promotes them)
     print("CREATE:")
     lines = sync_create(filepath, lines, clickup_tasks)
     print()
+
+    # Promote any matured TECH lines out of # Future Projects
+    lines = organize_future_projects(lines)
 
     # Re-parse after creation (line numbers may have shifted)
     if not DRY_RUN:
