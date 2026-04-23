@@ -41,7 +41,9 @@ When in doubt between `review` and `done`, use `review`.
 
 ### Testing checklist
 
-When moving to `review` or `testing`, write a testing checklist to `~/notes/work_notes/testing-checklists/<TECH-ID>-<short-slug>.md` (or `<session-name>.md` if no task ID). Keep it focused on what a human should verify, not a replay of what you did. Include:
+When moving to `review` or `testing`, write a testing checklist to `~/notes/work_notes/testing-checklists/<TECH-ID>-<short-slug>.md` (or `<session-name>.md` if no task ID). Skip this for analytics tasks (Type=`analytics` in agents.csv) — their deliverable is the analysis itself, not something a reviewer re-runs.
+
+Keep it focused on what a human should verify, not a replay of what you did. Include:
 
 - Golden-path steps (the feature working end-to-end)
 - Edge cases and regressions you were worried about
