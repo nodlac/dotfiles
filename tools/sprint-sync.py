@@ -363,31 +363,24 @@ def _find_section_range(lines, heading):
 
 def _find_future_projects_insert(lines):
     """Return (lines, insert_idx) for new items in # Future Projects.
-    Creates the section after # Uncategorized Tasks if missing."""
+    Creates the section just above # Done if missing, else at end of file."""
     start, _ = _find_section_range(lines, "# Future Projects")
     if start is not None:
         return lines, start + 1
 
-    # Insert after # Uncategorized Tasks section (or after frontmatter/legend)
-    ustart, uend = _find_section_range(lines, "# Uncategorized Tasks")
-    insert_idx = uend if uend is not None else 0
-    if insert_idx == 0:
-        # No Uncategorized — put after frontmatter / legend
-        fence_count = 0
-        for i, line in enumerate(lines):
-            if line.strip() == "---":
-                fence_count += 1
-                if fence_count == 2:
-                    insert_idx = i + 1
-                    break
-        while insert_idx < len(lines) and lines[insert_idx].strip().startswith("<!--"):
-            insert_idx += 1
+    # Prefer to place just above # Done
+    dstart, _ = _find_section_range(lines, "# Done")
+    insert_idx = dstart if dstart is not None else len(lines)
 
     # Ensure a blank line before the new heading
     if insert_idx > 0 and lines[insert_idx - 1].strip() != "":
         lines[insert_idx:insert_idx] = ["\n"]
         insert_idx += 1
     lines[insert_idx:insert_idx] = ["# Future Projects\n", "\n"]
+    # Ensure a blank line after the new section (before # Done / EOF)
+    after = insert_idx + 2
+    if after < len(lines) and lines[after].strip() != "":
+        lines[after:after] = ["\n"]
     return lines, insert_idx + 1
 
 
