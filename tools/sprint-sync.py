@@ -172,6 +172,29 @@ def get_sprint_file(sprint_num=None):
     return find_current_sprint_file()
 
 
+def get_list_statuses(list_id):
+    """Return list of status name strings available for a ClickUp list."""
+    data = api("GET", f"/list/{list_id}")
+    if not data:
+        return []
+    return [s["status"] for s in data.get("statuses", [])]
+
+
+def resolve_status(target, available):
+    """Map a target status (e.g. 'Closed') to the actual list status string
+    (e.g. 'closed (caution!)'). Case-insensitive exact first, then substring."""
+    if not available:
+        return target
+    tl = target.lower()
+    for s in available:
+        if s.lower() == tl:
+            return s
+    for s in available:
+        if tl in s.lower():
+            return s
+    return target
+
+
 def get_task_by_tech_num(tech_num):
     """Look up a single task by its TECH-XXXX custom ID. Returns task dict or None."""
     data = api("GET", f"/task/TECH-{tech_num}?custom_task_ids=true&team_id={TEAM_ID}")
@@ -245,8 +268,11 @@ def parse_sprint_file(filepath):
     return parse_sprint_file_lines(lines)
 
 
+SPRINT_OVERRIDE_RE = re.compile(r'\s*>>\s*(\d+)\s*$')
+
+
 def parse_sprint_file_lines(lines):
-    """Parse in-memory lines and return dict of TECH ID -> (line_num, marker, title, indent)."""
+    """Parse in-memory lines and return dict of TECH ID -> (line_num, marker, title, indent, target_sprint)."""
     tasks = {}
     for i, line in enumerate(lines):
         m = TASK_LINE_PATTERN.match(line)
@@ -254,8 +280,14 @@ def parse_sprint_file_lines(lines):
             tech_id = m.group(3) or m.group(4)
             marker = f"[{m.group(2)}]"
             title = m.group(5).strip()
+            target_sprint = None
+            om = SPRINT_OVERRIDE_RE.search(title)
+            if om:
+                target_sprint = int(om.group(1))
+                title = SPRINT_OVERRIDE_RE.sub('', title).strip()
             indent = len(line) - len(line.lstrip())
-            tasks[tech_id] = {"line": i, "marker": marker, "title": title, "indent": indent}
+            tasks[tech_id] = {"line": i, "marker": marker, "title": title,
+                              "indent": indent, "target_sprint": target_sprint}
     return tasks, lines
 
 
@@ -663,7 +695,7 @@ def sync_pull(filepath, clickup_tasks, local_tasks, lines):
     return lines
 
 
-def sync_push(local_tasks, clickup_tasks, current_sprint_num=None):
+def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None):
     """Push local status changes to ClickUp.
     Returns (done_tech_ids, deleted_tech_nums, pushed_next_tech_nums).
     """
@@ -673,11 +705,15 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None):
         if custom_id:
             cu_lookup[custom_id.replace("TECH-", "")] = task
 
+    # Fetch actual list statuses so targets like "Closed" map to the list's
+    # real status string (e.g. "closed (caution!)").
+    list_statuses = get_list_statuses(list_id) if list_id else []
+
     pushed = 0
     done_tech_ids = []
     deleted_tech_nums = []
     pushed_next_tech_nums = []
-    next_list_id = None  # lazy-resolved on first [p]
+    sprint_list_cache = {}  # sprint_num -> (id, name)
 
     for tech_num, local in local_tasks.items():
         local_marker = local["marker"]
@@ -686,16 +722,23 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None):
             continue
 
         if target_status == "__push_next__":
-            if next_list_id is None:
-                if current_sprint_num is None:
-                    print(f"  SKIP TECH-{tech_num}: current sprint number unknown")
-                    continue
-                nl_id, nl_name = find_clickup_sprint_list(current_sprint_num + 1)
+            override = local.get("target_sprint")
+            if override is not None:
+                target_sprint = override
+            elif current_sprint_num is not None:
+                target_sprint = current_sprint_num + 1
+            else:
+                print(f"  SKIP TECH-{tech_num}: current sprint number unknown and no override")
+                continue
+
+            if target_sprint not in sprint_list_cache:
+                nl_id, nl_name = find_clickup_sprint_list(target_sprint)
                 if not nl_id:
-                    print(f"  SKIP TECH-{tech_num}: no ClickUp list for Sprint {current_sprint_num + 1}")
+                    print(f"  SKIP TECH-{tech_num}: no ClickUp list for Sprint {target_sprint}")
                     continue
-                next_list_id = nl_id
-                print(f"  Next sprint list: {nl_name} ({nl_id})")
+                sprint_list_cache[target_sprint] = (nl_id, nl_name)
+                print(f"  Target list: {nl_name} ({nl_id})")
+            target_list_id, target_list_name = sprint_list_cache[target_sprint]
 
             if tech_num not in cu_lookup:
                 fetched = get_task_by_tech_num(tech_num)
@@ -706,17 +749,17 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None):
                 continue
 
             if DRY_RUN:
-                print(f"  [dry-run] TECH-{tech_num}: push to next sprint list")
+                print(f"  [dry-run] TECH-{tech_num}: push to Sprint {target_sprint}")
                 pushed_next_tech_nums.append(tech_num)
                 pushed += 1
             else:
-                result = api("POST", f"/list/{next_list_id}/task/{cu_lookup[tech_num]['id']}")
+                result = api("POST", f"/list/{target_list_id}/task/{cu_lookup[tech_num]['id']}")
                 if result is not None:
-                    print(f"  TECH-{tech_num}: pushed to next sprint list")
+                    print(f"  TECH-{tech_num}: pushed to Sprint {target_sprint}")
                     pushed_next_tech_nums.append(tech_num)
                     pushed += 1
                 else:
-                    print(f"  TECH-{tech_num}: push-next failed")
+                    print(f"  TECH-{tech_num}: push failed")
             continue
 
         if target_status == "__delete__":
@@ -756,18 +799,20 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None):
         cu_task = cu_lookup[tech_num]
         cu_status = cu_task["status"]["status"]
 
-        if target_status == cu_status:
+        resolved = resolve_status(target_status, list_statuses)
+
+        if resolved.lower() == cu_status.lower():
             continue
 
         if DRY_RUN:
-            print(f"  [dry-run] TECH-{tech_num}: {cu_status} -> {target_status}")
+            print(f"  [dry-run] TECH-{tech_num}: {cu_status} -> {resolved}")
             pushed += 1
         else:
-            result = api("PUT", f"/task/{cu_task['id']}", {"status": target_status})
+            result = api("PUT", f"/task/{cu_task['id']}", {"status": resolved})
             if result:
-                print(f"  TECH-{tech_num}: {cu_status} -> {target_status}")
+                print(f"  TECH-{tech_num}: {cu_status} -> {resolved}")
                 pushed += 1
-                if target_status in ("done", "Closed"):
+                if resolved.lower() in ("done", "closed") or "closed" in resolved.lower():
                     done_tech_ids.append(f"TECH-{tech_num}")
 
     if pushed == 0:
@@ -1542,7 +1587,7 @@ tags:
   - sprints
 clickup_list_id: "{list_id}"
 ---
-<!-- [ ] todo  [/] in progress  [a] agent  [~] blocked/waiting  [>] qa  [!] urgent  [x] done  [d] delete  [p] push to next sprint
+<!-- [ ] todo  [/] in progress  [a] agent  [~] blocked/waiting  [>] qa  [!] urgent  [x] done  [d] delete  [p] push to next sprint (or " >> N" for target)
 NEW create  NEW_XX deferred until sprint >= XX  PENDING:<id> awaiting custom ID -->
 
 # Uncategorized Tasks
@@ -1651,7 +1696,7 @@ def main(target_sprint_num=None):
     # Push status changes
     print("PUSH:")
     done_tech_ids, deleted_tech_nums, pushed_next_tech_nums = sync_push(
-        local_tasks, clickup_tasks, current_sprint_num=sprint_num
+        local_tasks, clickup_tasks, current_sprint_num=sprint_num, list_id=list_id
     )
     print()
 
