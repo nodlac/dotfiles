@@ -137,6 +137,73 @@ _va_ensure_db_data() {
     return 1
 }
 
+
+vidangel-start-apple() {
+    local dest device
+    case "$1" in
+      tv)     device="Apple TV 4K (3rd generation)"; dest="platform=tvOS Simulator,name=$device" ;;
+      ipad)   device="iPad Pro 13-inch (M4)";        dest="platform=iOS Simulator,name=$device" ;;
+      iphone) device="iPhone 16 Pro";                dest="platform=iOS Simulator,name=$device" ;;
+      *) echo "usage: vidangel-start-apple tv|ipad|iphone"; return 1 ;;
+    esac
+
+    echo "=== vidangel-start-apple: $1 ==="
+    echo "  device : $device"
+    echo "  dest   : $dest"
+
+    local proj=~/vidangel-repo/apple-clients/VidAngel/VidAngel.xcodeproj
+    local scheme="VidAngel - Staging"
+    local dd=/tmp/vidangel-dd
+    echo "  proj   : $proj"
+    echo "  scheme : $scheme"
+    echo "  dd     : $dd"
+
+    echo "[1/6] Resolving simulator UDID..."
+    local udid=$(xcrun simctl list devices available | grep -F "$device (" | head -1 | grep -oE '[A-F0-9-]{36}')
+    if [ -z "$udid" ]; then
+        echo "  FAIL: sim not found for '$device'"
+        return 1
+    fi
+    echo "  udid: $udid"
+
+    echo "[2/6] Booting simulator..."
+    if xcrun simctl bootstatus "$udid" -b >/dev/null 2>&1; then
+        echo "  already booted"
+    else
+        xcrun simctl boot "$udid" || { echo "  FAIL: boot"; return 1; }
+        echo "  booted"
+    fi
+
+    echo "[3/6] Opening Simulator.app..."
+    open -a Simulator
+
+    echo "[4/6] Building (xcodebuild)..."
+    xcodebuild -project "$proj" -scheme "$scheme" -destination "$dest" \
+      -derivedDataPath "$dd" -configuration Debug \
+      -skipMacroValidation -skipPackagePluginValidation build
+    local rc=$?
+    if [ $rc -ne 0 ]; then
+        echo "  FAIL: xcodebuild exited $rc"
+        return $rc
+    fi
+    echo "  build OK"
+
+    echo "[5/6] Locating .app bundle..."
+    local app=$(find "$dd/Build/Products" -maxdepth 3 -name "*.app" | head -1)
+    if [ -z "$app" ]; then
+        echo "  FAIL: no .app under $dd/Build/Products"
+        return 1
+    fi
+    echo "  app: $app"
+    local bid=$(defaults read "$app/Info" CFBundleIdentifier)
+    echo "  bundle id: $bid"
+
+    echo "[6/6] Installing + launching..."
+    xcrun simctl install "$udid" "$app" || { echo "  FAIL: install"; return 1; }
+    xcrun simctl launch "$udid" "$bid" || { echo "  FAIL: launch"; return 1; }
+    echo "  launched"
+  }
+
 ##########################################################
 # Public functions
 ##########################################################
