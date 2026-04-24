@@ -19,15 +19,12 @@ local STATUS_ITEMS = {
   { label = " ",  detail = "todo"           },
   { label = "/",  detail = "in progress"    },
   { label = ">",  detail = "qa"             },
-  { label = "T",  detail = "testing"        },
   { label = "x",  detail = "done"           },
   { label = "c",  detail = "closed"         },
-  { label = "a",  detail = "agent running"  },
   { label = "d",  detail = "delete"         },
-  { label = "p",  detail = "push to next sprint" },
   { label = "~",  detail = "blocked / waiting" },
   { label = "!",  detail = "urgent"         },
-  { label = "NN", detail = "push to sprint NN — replace NN with digits" },
+  { label = "NN", detail = "attach to sprint NN — replace NN with digits" },
 }
 
 local function in_bracket_context()

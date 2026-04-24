@@ -31,12 +31,9 @@ MARKER_TO_STATUS = {
     "[ ]": "to do",
     "[/]": "in progress",
     "[>]": "qa",
-    "[T]": "qa",           # testing required — maps to qa in ClickUp
     "[x]": "done",
-    "[c]": "Closed",  # closed in ClickUp and moves to Done section locally
-    "[a]": "in progress",  # agent running counts as in progress in ClickUp
-    "[d]": "__delete__",   # delete from ClickUp and remove line
-    "[p]": "__push_next__", # attach to next sprint list in ClickUp, remove line locally
+    "[c]": "Closed",        # closed in ClickUp and moves to Done section locally
+    "[d]": "__delete__",    # delete from ClickUp and remove line
 }
 
 STATUS_TO_MARKER = {
@@ -44,7 +41,15 @@ STATUS_TO_MARKER = {
     "in progress": "[/]",
     "qa": "[>]",
     "done": "[x]",
-    "testing": "[T]",
+}
+
+# Sort order for # Current Sprint: urgent first, blocked last.
+CURRENT_SPRINT_STATUS_ORDER = {
+    "[!]": 0,
+    "[>]": 1,
+    "[/]": 2,
+    "[ ]": 3,
+    "[~]": 4,
 }
 
 # Patterns
@@ -507,6 +512,108 @@ def insert_into_remembered_section(lines, heading_text, task_line):
     return lines, insert_idx
 
 
+def sort_sections(lines):
+    """Sort tasks within each section.
+
+    - # Current Sprint  → status priority: ! > > > / > ' ' > ~ (CURRENT_SPRINT_STATUS_ORDER)
+    - other ## sections → TECH ID asc
+    - # Future Projects, # Done              → leave alone (others handle them)
+    """
+    if not lines:
+        return lines
+    # Identify section spans at any heading level
+    heading_idxs = [i for i, l in enumerate(lines) if re.match(r"^#+\s+", l.lstrip())]
+    heading_idxs.append(len(lines))
+
+    for h_i in range(len(heading_idxs) - 1):
+        start = heading_idxs[h_i]
+        end = heading_idxs[h_i + 1]
+        heading_line = lines[start].rstrip()
+        heading_text = heading_line.lstrip("# ").strip()
+        if heading_text in ("Future Projects", "Done"):
+            continue
+
+        is_current = heading_text == "Current Sprint"
+
+        # Group task "blocks" (task line + deeper-indented children)
+        body = lines[start + 1:end]
+        blocks = []
+        i = 0
+        preamble = []
+        # Skip leading blank/comment lines as preamble
+        while i < len(body) and body[i].strip() == "":
+            preamble.append(body[i])
+            i += 1
+        while i < len(body):
+            line = body[i]
+            m = TASK_LINE_PATTERN.match(line)
+            if m:
+                task_indent = len(line) - len(line.lstrip())
+                block = [line]
+                j = i + 1
+                # Absorb blank + deeper-indented successors
+                while j < len(body):
+                    nxt = body[j]
+                    if nxt.strip() == "":
+                        block.append(nxt)
+                        j += 1
+                        continue
+                    nxt_indent = len(nxt) - len(nxt.lstrip())
+                    if nxt_indent > task_indent:
+                        block.append(nxt)
+                        j += 1
+                    else:
+                        break
+                # Trim trailing blank
+                while block and block[-1].strip() == "":
+                    block.pop()
+                blocks.append(("task", m, block))
+                i = j
+            else:
+                # Not a task — keep as loose line (e.g. notes between tasks)
+                blocks.append(("loose", None, [line]))
+                i += 1
+
+        if not blocks or not any(t == "task" for t, _, _ in blocks):
+            continue
+
+        def sort_key(entry):
+            t, m, block = entry
+            if t != "task":
+                return (99, 0, 0)
+            marker = f"[{m.group(2)}]"
+            tech_id = int(m.group(3) or m.group(4))
+            if is_current:
+                rank = CURRENT_SPRINT_STATUS_ORDER.get(marker, 10)
+                return (rank, tech_id, 0)
+            return (0, tech_id, 0)
+
+        # Only sort if section has 2+ task blocks
+        task_blocks = [b for b in blocks if b[0] == "task"]
+        if len(task_blocks) < 2:
+            continue
+        task_blocks.sort(key=sort_key)
+
+        # Rebuild: preamble + sorted task blocks (blank line between),
+        # dropping loose lines for sortable sections (they're rare
+        # inside task sections and mostly pre-existing cruft).
+        new_body = list(preamble)
+        for idx, (_, _, blk) in enumerate(task_blocks):
+            if idx > 0:
+                new_body.append("\n")
+            new_body.extend(blk)
+        # Ensure trailing blank before next heading
+        if new_body and new_body[-1].strip() != "":
+            new_body.append("\n")
+
+        lines = lines[:start + 1] + new_body + lines[end:]
+        # Recompute indices since we mutated
+        heading_idxs = [i for i, l in enumerate(lines) if re.match(r"^#+\s+", l.lstrip())]
+        heading_idxs.append(len(lines))
+
+    return lines
+
+
 def organize_future_projects(lines, current_sprint=None):
     """Promote matured TECH-XXXX lines inside # Future Projects back to
     # Current Sprint. A TECH line with a `>> NN` suffix counts as
@@ -878,32 +985,19 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
             pushed += 1
             continue
 
-        if target_status in ("__push_next__", "__push_sprint__"):
-            if target_status == "__push_sprint__":
-                target_sprint = marker_sprint_override
-                if current_sprint_num is not None and target_sprint <= current_sprint_num:
-                    print(f"  ERROR TECH-{tech_num}: [{target_sprint}] must be > current sprint {current_sprint_num}")
-                    continue
-            else:  # __push_next__
-                override = local.get("target_sprint")
-                if override is not None:
-                    target_sprint = override
-                elif current_sprint_num is not None:
-                    target_sprint = current_sprint_num + 1
-                else:
-                    print(f"  SKIP TECH-{tech_num}: current sprint number unknown and no override")
-                    continue
+        if target_status == "__push_sprint__":
+            target_sprint = marker_sprint_override
+            if current_sprint_num is not None and target_sprint <= current_sprint_num:
+                print(f"  ERROR TECH-{tech_num}: [{target_sprint}] must be > current sprint {current_sprint_num}")
+                continue
 
             if target_sprint not in sprint_list_cache:
                 nl_id, nl_name = find_clickup_sprint_list(target_sprint)
                 sprint_list_cache[target_sprint] = (nl_id, nl_name)
             target_list_id, target_list_name = sprint_list_cache[target_sprint]
 
-            # If no ClickUp list yet: just remove the line from current file.
             if target_list_id is None:
-                print(f"  TECH-{tech_num}: Sprint {target_sprint} has no ClickUp list — removing line from current file")
-                pushed_next_tech_nums.append(tech_num)
-                pushed += 1
+                print(f"  SKIP TECH-{tech_num}: Sprint {target_sprint} has no ClickUp list yet")
                 continue
 
             if tech_num not in cu_lookup:
@@ -915,17 +1009,17 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
                 continue
 
             if DRY_RUN:
-                print(f"  [dry-run] TECH-{tech_num}: push to Sprint {target_sprint}, move to Future Projects")
+                print(f"  [dry-run] TECH-{tech_num}: attach to Sprint {target_sprint}, reset marker")
                 push_target_map[tech_num] = target_sprint
                 pushed += 1
             else:
                 result = api("POST", f"/list/{target_list_id}/task/{cu_lookup[tech_num]['id']}")
                 if result is not None:
-                    print(f"  TECH-{tech_num}: pushed to Sprint {target_sprint} ({target_list_name})")
+                    print(f"  TECH-{tech_num}: attached to Sprint {target_sprint} ({target_list_name})")
                     push_target_map[tech_num] = target_sprint
                     pushed += 1
                 else:
-                    print(f"  TECH-{tech_num}: push failed")
+                    print(f"  TECH-{tech_num}: attach failed")
             continue
 
         if target_status == "__delete__":
@@ -1753,7 +1847,7 @@ tags:
   - sprints
 clickup_list_id: "{list_id}"
 ---
-<!-- [ ] todo  [/] in progress  [a] agent  [~] blocked/waiting  [>] qa  [!] urgent  [x] done  [d] delete  [p] push, [NN] push to sprint NN, [topic] file under ## topic heading
+<!-- [ ] todo  [/] in progress  [~] blocked/waiting  [>] qa  [!] urgent  [x] done  [d] delete  [NN] attach to sprint NN, [topic] file under ## topic heading
 NEW create  NEW_XX deferred until sprint >= XX  PENDING:<id> awaiting custom ID -->
 
 # Current Sprint
@@ -1894,13 +1988,13 @@ def main(target_sprint_num=None):
         with open(filepath, "w") as f:
             f.writelines(kept)
 
-    # Move [p]/[NN] pushed lines into # Future Projects, reset marker to [ ],
-    # ensure a trailing '>> NN' suffix indicating the target sprint.
+    # [NN]-marked lines were attached to that sprint's list. Line stays
+    # where it is in the file; reset marker to [ ] and append `>> NN`
+    # suffix (if missing) so auto-promote later respects the target.
     if push_target_map and not DRY_RUN:
         with open(filepath) as f:
             current_lines = f.readlines()
-
-        # Rewrite marker -> [ ] and append `>> NN` suffix if missing
+        changed = 0
         for i, line in enumerate(current_lines):
             m = TASK_LINE_PATTERN.match(line)
             if not m:
@@ -1913,32 +2007,11 @@ def main(target_sprint_num=None):
             if not SPRINT_OVERRIDE_RE.search(new_line.rstrip("\n")):
                 new_line = new_line.rstrip("\n") + f" >> {target_sprint}\n"
             current_lines[i] = new_line
-
-        # Move those lines into # Future Projects
-        moved_idxs = []
-        for i, line in enumerate(current_lines):
-            m = TASK_LINE_PATTERN.match(line)
-            if not m:
-                continue
-            tech_num = m.group(3) or m.group(4)
-            if tech_num in push_target_map:
-                moved_idxs.append(i)
-
-        # Pop from bottom up to preserve indices, then insert at Future Projects
-        blocks = []
-        for i in sorted(moved_idxs, reverse=True):
-            blocks.append(current_lines.pop(i))
-        blocks.reverse()
-
-        if blocks:
-            current_lines, insert_idx = _find_future_projects_insert(current_lines)
-            for b in blocks:
-                current_lines.insert(insert_idx, b)
-                insert_idx += 1
-
+            changed += 1
         with open(filepath, "w") as f:
             f.writelines(current_lines)
-        print(f"  Moved {len(blocks)} pushed task(s) to # Future Projects.")
+        if changed:
+            print(f"  Reset marker and tagged {changed} task(s) for future sprint.")
 
     # File alpha-topic-marker lines into matching section inside sprint file
     if file_to_section_map:
@@ -2016,28 +2089,81 @@ def main(target_sprint_num=None):
                 in_future.add(m.group(3) or m.group(4))
 
     cu_ids = {(t.get("custom_id") or "").replace("TECH-", "") for t in clickup_tasks if t.get("custom_id")}
-    attached = 0
+    attached_tech_nums = set()
     for tech_num, info in local_now.items():
         if tech_num in cu_ids or tech_num in in_future:
             continue
         if info["marker"] in ("[x]", "[c]", "[d]"):
             continue
-        # Resolve task ID
         remote = get_task_by_tech_num(tech_num)
         if not remote:
             print(f"  SKIP TECH-{tech_num}: not in ClickUp")
             continue
         if DRY_RUN:
             print(f"  [dry-run] TECH-{tech_num}: attach to Sprint {sprint_num} list")
+            attached_tech_nums.add(tech_num)
         else:
             res = api("POST", f"/list/{list_id}/task/{remote['id']}")
             if res is not None:
                 print(f"  TECH-{tech_num}: attached to Sprint {sprint_num} list")
+                attached_tech_nums.add(tech_num)
             else:
                 print(f"  TECH-{tech_num}: attach failed")
-        attached += 1
-    if attached == 0:
+    if not attached_tech_nums:
         print("  Nothing to attach.")
+    print()
+
+    # Promote every task attached to the current sprint list into
+    # # Current Sprint. Tasks NOT in the current list stay in their
+    # topical section (user-filed home).
+    print("PROMOTE TO CURRENT:")
+    with open(filepath) as f:
+        current_lines = f.readlines()
+    current_ids = {(t.get("custom_id") or "").replace("TECH-", "")
+                   for t in clickup_tasks if t.get("custom_id")}
+    current_ids |= attached_tech_nums  # newly-attached this run
+    cs_start, cs_end = _find_section_range(current_lines, "# Current Sprint")
+    moved = 0
+    if cs_start is not None and current_ids:
+        to_promote = []
+        for i, line in enumerate(current_lines):
+            if cs_start <= i < cs_end:
+                continue
+            m = TASK_LINE_PATTERN.match(line)
+            if not m:
+                continue
+            tnum = m.group(3) or m.group(4)
+            if tnum in current_ids and m.group(2).strip() not in ("x", "c", "d"):
+                to_promote.append(i)
+        if to_promote and not DRY_RUN:
+            blocks = [current_lines.pop(i) for i in sorted(to_promote, reverse=True)]
+            blocks.reverse()
+            current_lines, insert_idx = _find_uncategorized_insert(current_lines)
+            for b in blocks:
+                # Strip any stale '>> NN' suffix since task is now current-sprint
+                b = SPRINT_OVERRIDE_RE.sub('', b.rstrip("\n")) + "\n"
+                current_lines.insert(insert_idx, b)
+                insert_idx += 1
+            with open(filepath, "w") as f:
+                f.writelines(current_lines)
+            moved = len(blocks)
+        elif to_promote:
+            for i in to_promote:
+                print(f"  [dry-run] Would promote: {current_lines[i].strip()}")
+            moved = len(to_promote)
+    print(f"  Promoted {moved} task(s) to # Current Sprint.")
+    print()
+
+    # Sort pass: # Current Sprint by status priority; other ## sections
+    # by TECH ID asc; # Future Projects by target sprint (existing logic
+    # in organize_future_projects).
+    print("SORT SECTIONS:")
+    with open(filepath) as f:
+        current_lines = f.readlines()
+    current_lines = sort_sections(current_lines)
+    if not DRY_RUN:
+        with open(filepath, "w") as f:
+            f.writelines(current_lines)
     print()
 
     # Move done items to # Done section
