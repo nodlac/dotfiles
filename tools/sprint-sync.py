@@ -508,34 +508,12 @@ def insert_into_remembered_section(lines, heading_text, task_line):
 
 
 def organize_future_projects(lines, current_sprint=None):
-    """Move `- [ ] NEW_XX` lines to # Future Projects; promote matured
-    TECH-XXXX lines back to # Uncategorized Tasks. A TECH line with a
-    `>> NN` suffix counts as matured only when NN <= current_sprint."""
+    """Promote matured TECH-XXXX lines inside # Future Projects back to
+    # Current Sprint. A TECH line with a `>> NN` suffix counts as
+    matured only when NN <= current_sprint. NEW_XX lines are left
+    wherever the author put them (no auto-relocation)."""
     moved_to_future = 0
     moved_out = 0
-
-    # Pass 1: collect NEW_XX lines outside # Future Projects
-    fstart, fend = _find_section_range(lines, "# Future Projects")
-    to_future = []
-    for i, line in enumerate(lines):
-        if fstart is not None and fstart <= i < fend:
-            continue
-        m = NEW_TASK_PATTERN.match(line)
-        if m and m.group(3):  # gate_sprint set → NEW_XX
-            to_future.append(i)
-
-    # Remove in reverse order to preserve indices
-    blocks = []
-    for i in sorted(to_future, reverse=True):
-        blocks.append(lines.pop(i))
-    blocks.reverse()
-
-    if blocks:
-        lines, insert_idx = _find_future_projects_insert(lines)
-        for b in blocks:
-            lines.insert(insert_idx, b)
-            insert_idx += 1
-        moved_to_future = len(blocks)
 
     # Pass 2: matured TECH lines inside # Future Projects → back to Uncategorized
     fstart, fend = _find_section_range(lines, "# Future Projects")
@@ -601,11 +579,9 @@ def organize_future_projects(lines, current_sprint=None):
             lines = lines[:fstart + 1] + ["\n"] + new_block + ["\n"] + lines[fend:]
 
     tag = "[dry-run] " if DRY_RUN else ""
-    if moved_to_future:
-        print(f"  {tag}Moved {moved_to_future} NEW_XX line(s) to # Future Projects.")
     if moved_out:
         print(f"  {tag}Promoted {moved_out} matured task(s) from # Future Projects.")
-    if not moved_to_future and not moved_out:
+    else:
         print("  No changes.")
     return lines
 
