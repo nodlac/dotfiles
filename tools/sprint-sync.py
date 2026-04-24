@@ -307,14 +307,19 @@ def format_subtask_line(tech_id, marker, title, indent="        "):
     return f"{indent}- {marker} TECH-{tech_id} {title}\n"
 
 
+CURRENT_SPRINT_HEADING = "# Current Sprint"
+LEGACY_CURRENT_HEADINGS = ("# Current Sprint", "# Uncategorized Tasks")
+
+
 def _find_uncategorized_insert(lines):
-    """Return the line index to insert into # Uncategorized Tasks.
+    """Return the line index to insert into the current sprint section.
+    Prefers '# Current Sprint', falls back to legacy '# Uncategorized Tasks'.
     Creates the section if missing. Returns (lines, insert_idx)."""
     for i, line in enumerate(lines):
-        if line.strip() == "# Uncategorized Tasks":
-            return lines, i
+        if line.strip() in LEGACY_CURRENT_HEADINGS:
+            return lines, i + 1
 
-    # Section missing — create it after frontmatter / legend
+    # Section missing — create '# Current Sprint' after frontmatter / legend
     insert_idx = 0
     fence_count = 0
     for i, line in enumerate(lines):
@@ -324,13 +329,13 @@ def _find_uncategorized_insert(lines):
                 insert_idx = i + 1
                 break
     for i in range(insert_idx, len(lines)):
-        if lines[i].startswith("# Legend"):
+        if lines[i].startswith("# Legend") or lines[i].lstrip().startswith("<!--"):
             insert_idx = i + 1
             while insert_idx < len(lines) and lines[insert_idx].strip().startswith("<!--"):
                 insert_idx += 1
             break
 
-    lines[insert_idx:insert_idx] = ["\n", "# Uncategorized Tasks\n"]
+    lines[insert_idx:insert_idx] = ["\n", CURRENT_SPRINT_HEADING + "\n"]
     return lines, insert_idx + 2  # after the new header
 
 
@@ -420,7 +425,8 @@ def _find_future_projects_insert(lines):
 PLACEMENTS_FILE = os.path.join(SPRINT_DIR, ".placements.json")
 # Sections we never file *into* (pull destinations, done-pile, cruft).
 EXCLUDED_PLACEMENT_HEADINGS = {
-    "# Uncategorized Tasks",
+    "# Current Sprint",
+    "# Uncategorized Tasks",  # legacy
     "# Done",
     "# Future Projects",
 }
@@ -559,6 +565,40 @@ def organize_future_projects(lines, current_sprint=None):
                 lines.insert(insert_idx, m)
                 insert_idx += 1
             moved_out = len(matured_lines)
+
+    # Pass 3: sort parked items by target sprint, blank line between groups
+    fstart, fend = _find_section_range(lines, "# Future Projects")
+    if fstart is not None:
+        parked = []
+        for i in range(fstart + 1, fend):
+            line = lines[i]
+            # NEW_XX gate
+            mnew = NEW_TASK_PATTERN.match(line)
+            if mnew and mnew.group(3):
+                parked.append((int(mnew.group(3)), line))
+                continue
+            # TECH with >> NN
+            mtask = TASK_LINE_PATTERN.match(line)
+            if mtask:
+                override = SPRINT_OVERRIDE_RE.search(line.rstrip("\n"))
+                if override:
+                    parked.append((int(override.group(1)), line))
+                    continue
+
+        if parked:
+            parked.sort(key=lambda x: x[0])
+            # Rebuild section content grouped by sprint
+            new_block = []
+            last_sprint = None
+            for sprint_n, line in parked:
+                if last_sprint is not None and sprint_n != last_sprint:
+                    new_block.append("\n")
+                new_block.append(line)
+                last_sprint = sprint_n
+
+            # Replace old content (between heading and next section)
+            # Preserve the heading line; drop everything else until fend
+            lines = lines[:fstart + 1] + ["\n"] + new_block + ["\n"] + lines[fend:]
 
     tag = "[dry-run] " if DRY_RUN else ""
     if moved_to_future:
@@ -1740,7 +1780,7 @@ clickup_list_id: "{list_id}"
 <!-- [ ] todo  [/] in progress  [a] agent  [~] blocked/waiting  [>] qa  [!] urgent  [x] done  [d] delete  [p] push, [NN] push to sprint NN, [topic] file under ## topic heading
 NEW create  NEW_XX deferred until sprint >= XX  PENDING:<id> awaiting custom ID -->
 
-# Uncategorized Tasks
+# Current Sprint
 
 # Prioritized by Core Responsibilities
 
@@ -1981,6 +2021,48 @@ def main(target_sprint_num=None):
             for tech_num, heading in resolved.items():
                 print(f"  [dry-run] TECH-{tech_num}: file under {heading.strip()}")
         print()
+
+    # Attach any open local task that is NOT in the current sprint list AND
+    # is NOT parked for a future sprint (no `>> NN` suffix). Keeps local
+    # invariant: everything present here is either current-sprint or
+    # explicitly future-parked.
+    print("ATTACH STALE:")
+    with open(filepath) as f:
+        current_lines = f.readlines()
+    local_now, _ = parse_sprint_file_lines(current_lines)
+    # Find Future Projects range so we skip parked tasks
+    fstart, fend = _find_section_range(current_lines, "# Future Projects")
+    in_future = set()
+    if fstart is not None:
+        for i in range(fstart + 1, fend):
+            m = TASK_LINE_PATTERN.match(current_lines[i])
+            if m:
+                in_future.add(m.group(3) or m.group(4))
+
+    cu_ids = {(t.get("custom_id") or "").replace("TECH-", "") for t in clickup_tasks if t.get("custom_id")}
+    attached = 0
+    for tech_num, info in local_now.items():
+        if tech_num in cu_ids or tech_num in in_future:
+            continue
+        if info["marker"] in ("[x]", "[c]", "[d]"):
+            continue
+        # Resolve task ID
+        remote = get_task_by_tech_num(tech_num)
+        if not remote:
+            print(f"  SKIP TECH-{tech_num}: not in ClickUp")
+            continue
+        if DRY_RUN:
+            print(f"  [dry-run] TECH-{tech_num}: attach to Sprint {sprint_num} list")
+        else:
+            res = api("POST", f"/list/{list_id}/task/{remote['id']}")
+            if res is not None:
+                print(f"  TECH-{tech_num}: attached to Sprint {sprint_num} list")
+            else:
+                print(f"  TECH-{tech_num}: attach failed")
+        attached += 1
+    if attached == 0:
+        print("  Nothing to attach.")
+    print()
 
     # Move done items to # Done section
     print("MOVE DONE:")
