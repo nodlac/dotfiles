@@ -594,15 +594,12 @@ def sort_sections(lines):
             continue
         task_blocks.sort(key=sort_key)
 
-        # Rebuild: preamble + sorted task blocks (blank line between),
-        # dropping loose lines for sortable sections (they're rare
-        # inside task sections and mostly pre-existing cruft).
+        # Rebuild: preamble + sorted task blocks, contiguous (no blank
+        # line between). Drop loose lines in sortable sections.
         new_body = list(preamble)
-        for idx, (_, _, blk) in enumerate(task_blocks):
-            if idx > 0:
-                new_body.append("\n")
+        for _, _, blk in task_blocks:
             new_body.extend(blk)
-        # Ensure trailing blank before next heading
+        # Ensure exactly one trailing blank before next heading
         if new_body and new_body[-1].strip() != "":
             new_body.append("\n")
 
