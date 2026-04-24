@@ -920,10 +920,15 @@ require('lazy').setup({
       },
 
       sources = {
-        default = { 'lsp', 'path', 'snippets', 'lazydev', 'dadbod' },
+        default = { 'lsp', 'path', 'snippets', 'lazydev', 'dadbod', 'sprint_marker' },
         providers = {
           lazydev = { module = 'lazydev.integrations.blink', score_offset = 100 },
           dadbod = { name = 'Dadbod', module = 'vim_dadbod_completion.blink' },
+          sprint_marker = {
+            name = 'SprintMarker',
+            module = 'custom.blink-sprint-marker',
+            score_offset = 200,
+          },
         },
       },
 

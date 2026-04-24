@@ -830,7 +830,9 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
 
     # push_target_map: tech_num -> target_sprint (for lines to MOVE into Future Projects)
     # pushed_next_tech_nums: tech_num for lines to REMOVE from file (target list missing)
+    # file_to_section_map: tech_num -> section_heading_text (for alpha topic markers)
     push_target_map = {}
+    file_to_section_map = {}
 
     for tech_num, local in local_tasks.items():
         local_marker = local["marker"]
@@ -838,13 +840,26 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
 
         # Detect digit marker [NN] as push-to-sprint-NN
         marker_sprint_override = None
+        file_topic = None
         if target_status is None:
             mnum = re.fullmatch(r'\[(\d+)\]', local_marker)
             if mnum:
                 marker_sprint_override = int(mnum.group(1))
                 target_status = "__push_sprint__"
+            else:
+                # Multi-char alpha marker → file to matching section
+                mtopic = re.fullmatch(r'\[([A-Za-z][A-Za-z0-9 _\-]*)\]', local_marker)
+                if mtopic and mtopic.group(1) not in (k.strip('[]') for k in MARKER_TO_STATUS):
+                    file_topic = mtopic.group(1).strip()
+                    target_status = "__file_to_section__"
 
         if not target_status:
+            continue
+
+        if target_status == "__file_to_section__":
+            # Defer: main() will find the heading, move the line, reset marker.
+            file_to_section_map[tech_num] = file_topic
+            pushed += 1
             continue
 
         if target_status in ("__push_next__", "__push_sprint__"):
@@ -955,7 +970,7 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
     else:
         print(f"  Pushed {pushed} status updates.")
 
-    return done_tech_ids, deleted_tech_nums, pushed_next_tech_nums, push_target_map
+    return done_tech_ids, deleted_tech_nums, pushed_next_tech_nums, push_target_map, file_to_section_map
 
 
 def _derive_local_parents(local_tasks):
@@ -1722,7 +1737,7 @@ tags:
   - sprints
 clickup_list_id: "{list_id}"
 ---
-<!-- [ ] todo  [/] in progress  [a] agent  [~] blocked/waiting  [>] qa  [!] urgent  [x] done  [d] delete  [p] push to next sprint, [NN] push to sprint NN
+<!-- [ ] todo  [/] in progress  [a] agent  [~] blocked/waiting  [>] qa  [!] urgent  [x] done  [d] delete  [p] push, [NN] push to sprint NN, [topic] file under ## topic heading
 NEW create  NEW_XX deferred until sprint >= XX  PENDING:<id> awaiting custom ID -->
 
 # Uncategorized Tasks
@@ -1835,7 +1850,7 @@ def main(target_sprint_num=None):
 
     # Push status changes
     print("PUSH:")
-    done_tech_ids, deleted_tech_nums, pushed_next_tech_nums, push_target_map = sync_push(
+    done_tech_ids, deleted_tech_nums, pushed_next_tech_nums, push_target_map, file_to_section_map = sync_push(
         local_tasks, clickup_tasks, current_sprint_num=sprint_num, list_id=list_id
     )
     print()
@@ -1908,6 +1923,64 @@ def main(target_sprint_num=None):
         with open(filepath, "w") as f:
             f.writelines(current_lines)
         print(f"  Moved {len(blocks)} pushed task(s) to # Future Projects.")
+
+    # File alpha-topic-marker lines into matching section inside sprint file
+    if file_to_section_map:
+        print("FILE:")
+        with open(filepath) as f:
+            current_lines = f.readlines()
+
+        # Build a normalized heading map: key = lowercase-trimmed text, val = full heading line
+        heading_map = {}
+        for line in current_lines:
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                text = stripped.lstrip("#").strip().lower()
+                heading_map[text] = line.rstrip()
+
+        resolved = {}  # tech_num -> heading_text
+        for tech_num, topic in file_to_section_map.items():
+            heading = heading_map.get(topic.lower().strip())
+            if heading is None:
+                print(f"  ERROR TECH-{tech_num}: no heading matching '{topic}' in sprint file — leaving marker as-is")
+                continue
+            resolved[tech_num] = heading
+
+        if resolved and not DRY_RUN:
+            # Reset markers on resolved lines to [ ]
+            for i, line in enumerate(current_lines):
+                m = TASK_LINE_PATTERN.match(line)
+                if not m:
+                    continue
+                tech_num = m.group(3) or m.group(4)
+                if tech_num in resolved:
+                    current_lines[i] = re.sub(r'\[[^\]]+\]', '[ ]', line, count=1)
+
+            # Extract lines to move
+            move_map = {}  # heading_text -> [lines]
+            keep = []
+            for line in current_lines:
+                m = TASK_LINE_PATTERN.match(line)
+                if m:
+                    tech_num = m.group(3) or m.group(4)
+                    if tech_num in resolved:
+                        move_map.setdefault(resolved[tech_num], []).append(line)
+                        continue
+                keep.append(line)
+            current_lines = keep
+
+            # Insert under each target heading
+            for heading, blk in move_map.items():
+                for b in blk:
+                    current_lines, _ = insert_into_remembered_section(current_lines, heading, b)
+                print(f"  Filed {len(blk)} task(s) under {heading.strip()}")
+
+            with open(filepath, "w") as f:
+                f.writelines(current_lines)
+        elif resolved and DRY_RUN:
+            for tech_num, heading in resolved.items():
+                print(f"  [dry-run] TECH-{tech_num}: file under {heading.strip()}")
+        print()
 
     # Move done items to # Done section
     print("MOVE DONE:")
