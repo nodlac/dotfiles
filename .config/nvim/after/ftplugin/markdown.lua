@@ -6,13 +6,13 @@ vim.opt_local.conceallevel = 0
 
 -- Checkbox highlight groups — distinct, high-contrast palette
 vim.api.nvim_set_hl(0, 'CbDone',    { fg = '#ff007c' })  -- party pink
-vim.api.nvim_set_hl(0, 'CbProgress',{ fg = '#e0af68' })  -- amber
+vim.api.nvim_set_hl(0, 'CbProgress',{ fg = '#7aa2f7' })  -- blue (in progress)
 vim.api.nvim_set_hl(0, 'CbUrgent',  { fg = '#ff9e64' })  -- orange
-vim.api.nvim_set_hl(0, 'CbReview',  { fg = '#7aa2f7' })  -- blue
+vim.api.nvim_set_hl(0, 'CbReview',  { fg = '#bb9af7' })  -- purple (QA)
 vim.api.nvim_set_hl(0, 'CbBlocked', { fg = '#f7768e' })  -- red
 vim.api.nvim_set_hl(0, 'CbAlt',     { fg = '#0db9d7' })  -- cyan
 vim.api.nvim_set_hl(0, 'CbCode',    { fg = '#73daca' })  -- teal
-vim.api.nvim_set_hl(0, 'CbDefer',   { fg = '#bb9af7' })  -- purple
+vim.api.nvim_set_hl(0, 'CbDefer',   { fg = '#565f89' })  -- muted slate (delete)
 
 -- Checkboxes (higher priority so they override treesitter)
 vim.fn.matchadd('CbDone',     '\\[x\\]', 20)   -- done
