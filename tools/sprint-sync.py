@@ -54,7 +54,7 @@ TECH_PATTERN = re.compile(r"TECH-(\d+)")
 #   - [x] [TECH-1234](url) title        (legacy prepended link)
 #   - [x] TECH-1234 title               (plain, no link)
 TASK_LINE_PATTERN = re.compile(
-    r"^(\s*-\s*)\[(.)\]\s+"  # prefix + marker
+    r"^(\s*-\s*)\[([^\]]+)\]\s+"  # prefix + marker (1+ non-bracket chars)
     r"(?:\[TECH-(\d+)\]\([^)]*\)|TECH-(\d+))"  # linked or plain TECH ID
     r"\s*(.*?)(?:\s*\[link\]\([^)]*\))?(?:\s*\d{4}-\d{2}-\d{2})?\s*$"  # title, stripping trailing [link](url) and date
 )
@@ -416,9 +416,10 @@ def _find_future_projects_insert(lines):
     return lines, insert_idx + 1
 
 
-def organize_future_projects(lines):
-    """Move `- [ ] NEW_XX` lines to # Future Projects; move matured TECH-XXXX
-    lines inside # Future Projects back to # Uncategorized Tasks."""
+def organize_future_projects(lines, current_sprint=None):
+    """Move `- [ ] NEW_XX` lines to # Future Projects; promote matured
+    TECH-XXXX lines back to # Uncategorized Tasks. A TECH line with a
+    `>> NN` suffix counts as matured only when NN <= current_sprint."""
     moved_to_future = 0
     moved_out = 0
 
@@ -450,11 +451,21 @@ def organize_future_projects(lines):
     if fstart is not None:
         matured = []
         for i in range(fstart + 1, fend):
-            if TASK_LINE_PATTERN.match(lines[i]):
-                matured.append(i)
+            m = TASK_LINE_PATTERN.match(lines[i])
+            if not m:
+                continue
+            # Check for `>> NN` suffix — only promote if NN <= current_sprint
+            override = SPRINT_OVERRIDE_RE.search(lines[i].rstrip("\n"))
+            if override and current_sprint is not None:
+                if int(override.group(1)) > current_sprint:
+                    continue  # still pending, leave parked
+            matured.append(i)
         matured_lines = []
         for i in sorted(matured, reverse=True):
-            matured_lines.append(lines.pop(i))
+            # Strip the `>> NN` suffix when promoting
+            line = lines.pop(i)
+            line = SPRINT_OVERRIDE_RE.sub('', line.rstrip("\n")) + "\n"
+            matured_lines.append(line)
         matured_lines.reverse()
 
         if matured_lines:
@@ -480,9 +491,9 @@ def _update_task_marker(lines, line_idx, new_marker):
     m = TASK_LINE_PATTERN.match(line)
     if not m:
         return lines
-    # new_marker is like "[x]"; strip the brackets, keep just the char
-    mchar = new_marker.strip("[]")
-    lines[line_idx] = re.sub(r'\[.\]', f'[{mchar}]', line, count=1)
+    # new_marker is like "[x]" or "[30]" — preserve brackets as given
+    bracketed = new_marker if new_marker.startswith("[") else f"[{new_marker}]"
+    lines[line_idx] = re.sub(r'\[[^\]]+\]', bracketed, line, count=1)
     return lines
 
 
@@ -715,48 +726,70 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
     pushed_next_tech_nums = []
     sprint_list_cache = {}  # sprint_num -> (id, name)
 
+    # push_target_map: tech_num -> target_sprint (for lines to MOVE into Future Projects)
+    # pushed_next_tech_nums: tech_num for lines to REMOVE from file (target list missing)
+    push_target_map = {}
+
     for tech_num, local in local_tasks.items():
         local_marker = local["marker"]
         target_status = MARKER_TO_STATUS.get(local_marker)
+
+        # Detect digit marker [NN] as push-to-sprint-NN
+        marker_sprint_override = None
+        if target_status is None:
+            mnum = re.fullmatch(r'\[(\d+)\]', local_marker)
+            if mnum:
+                marker_sprint_override = int(mnum.group(1))
+                target_status = "__push_sprint__"
+
         if not target_status:
             continue
 
-        if target_status == "__push_next__":
-            override = local.get("target_sprint")
-            if override is not None:
-                target_sprint = override
-            elif current_sprint_num is not None:
-                target_sprint = current_sprint_num + 1
-            else:
-                print(f"  SKIP TECH-{tech_num}: current sprint number unknown and no override")
-                continue
+        if target_status in ("__push_next__", "__push_sprint__"):
+            if target_status == "__push_sprint__":
+                target_sprint = marker_sprint_override
+                if current_sprint_num is not None and target_sprint <= current_sprint_num:
+                    print(f"  ERROR TECH-{tech_num}: [{target_sprint}] must be > current sprint {current_sprint_num}")
+                    continue
+            else:  # __push_next__
+                override = local.get("target_sprint")
+                if override is not None:
+                    target_sprint = override
+                elif current_sprint_num is not None:
+                    target_sprint = current_sprint_num + 1
+                else:
+                    print(f"  SKIP TECH-{tech_num}: current sprint number unknown and no override")
+                    continue
 
             if target_sprint not in sprint_list_cache:
                 nl_id, nl_name = find_clickup_sprint_list(target_sprint)
-                if not nl_id:
-                    print(f"  SKIP TECH-{tech_num}: no ClickUp list for Sprint {target_sprint}")
-                    continue
                 sprint_list_cache[target_sprint] = (nl_id, nl_name)
-                print(f"  Target list: {nl_name} ({nl_id})")
             target_list_id, target_list_name = sprint_list_cache[target_sprint]
+
+            # If no ClickUp list yet: just remove the line from current file.
+            if target_list_id is None:
+                print(f"  TECH-{tech_num}: Sprint {target_sprint} has no ClickUp list — removing line from current file")
+                pushed_next_tech_nums.append(tech_num)
+                pushed += 1
+                continue
 
             if tech_num not in cu_lookup:
                 fetched = get_task_by_tech_num(tech_num)
                 if fetched:
                     cu_lookup[tech_num] = fetched
             if tech_num not in cu_lookup:
-                print(f"  SKIP TECH-{tech_num}: not in ClickUp (cannot attach to next sprint)")
+                print(f"  SKIP TECH-{tech_num}: not in ClickUp (cannot attach to Sprint {target_sprint})")
                 continue
 
             if DRY_RUN:
-                print(f"  [dry-run] TECH-{tech_num}: push to Sprint {target_sprint}")
-                pushed_next_tech_nums.append(tech_num)
+                print(f"  [dry-run] TECH-{tech_num}: push to Sprint {target_sprint}, move to Future Projects")
+                push_target_map[tech_num] = target_sprint
                 pushed += 1
             else:
                 result = api("POST", f"/list/{target_list_id}/task/{cu_lookup[tech_num]['id']}")
                 if result is not None:
-                    print(f"  TECH-{tech_num}: pushed to Sprint {target_sprint}")
-                    pushed_next_tech_nums.append(tech_num)
+                    print(f"  TECH-{tech_num}: pushed to Sprint {target_sprint} ({target_list_name})")
+                    push_target_map[tech_num] = target_sprint
                     pushed += 1
                 else:
                     print(f"  TECH-{tech_num}: push failed")
@@ -820,7 +853,7 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
     else:
         print(f"  Pushed {pushed} status updates.")
 
-    return done_tech_ids, deleted_tech_nums, pushed_next_tech_nums
+    return done_tech_ids, deleted_tech_nums, pushed_next_tech_nums, push_target_map
 
 
 def _derive_local_parents(local_tasks):
@@ -1587,7 +1620,7 @@ tags:
   - sprints
 clickup_list_id: "{list_id}"
 ---
-<!-- [ ] todo  [/] in progress  [a] agent  [~] blocked/waiting  [>] qa  [!] urgent  [x] done  [d] delete  [p] push to next sprint (or " >> N" for target)
+<!-- [ ] todo  [/] in progress  [a] agent  [~] blocked/waiting  [>] qa  [!] urgent  [x] done  [d] delete  [p] push to next sprint, [NN] push to sprint NN
 NEW create  NEW_XX deferred until sprint >= XX  PENDING:<id> awaiting custom ID -->
 
 # Uncategorized Tasks
@@ -1652,7 +1685,7 @@ def main(target_sprint_num=None):
 
     # Park deferred NEW_XX tasks under # Future Projects
     print("ORGANIZE FUTURE:")
-    lines = organize_future_projects(lines)
+    lines = organize_future_projects(lines, current_sprint=sprint_num)
     print()
     if not DRY_RUN:
         with open(filepath, "w") as f:
@@ -1665,7 +1698,7 @@ def main(target_sprint_num=None):
     print()
 
     # Promote any matured TECH lines out of # Future Projects
-    lines = organize_future_projects(lines)
+    lines = organize_future_projects(lines, current_sprint=sprint_num)
 
     # Re-parse after creation (line numbers may have shifted)
     if not DRY_RUN:
@@ -1695,7 +1728,7 @@ def main(target_sprint_num=None):
 
     # Push status changes
     print("PUSH:")
-    done_tech_ids, deleted_tech_nums, pushed_next_tech_nums = sync_push(
+    done_tech_ids, deleted_tech_nums, pushed_next_tech_nums, push_target_map = sync_push(
         local_tasks, clickup_tasks, current_sprint_num=sprint_num, list_id=list_id
     )
     print()
@@ -1705,7 +1738,7 @@ def main(target_sprint_num=None):
     sync_push_parents(local_tasks, clickup_tasks)
     print()
 
-    # Remove [d] and [p] lines from the sprint file
+    # Remove [d] lines and lines whose push target sprint has no ClickUp list yet.
     purge_nums = set(deleted_tech_nums) | set(pushed_next_tech_nums)
     if purge_nums and not DRY_RUN:
         with open(filepath) as f:
@@ -1716,12 +1749,58 @@ def main(target_sprint_num=None):
             if m:
                 tech_num = m.group(3) or m.group(4)
                 if tech_num in purge_nums:
-                    tag = "deleted" if tech_num in deleted_tech_nums else "pushed to next sprint"
+                    tag = "deleted" if tech_num in deleted_tech_nums else "pushed (no target list yet)"
                     print(f"  Removed TECH-{tech_num} from sprint file ({tag}).")
                     continue
             kept.append(line)
         with open(filepath, "w") as f:
             f.writelines(kept)
+
+    # Move [p]/[NN] pushed lines into # Future Projects, reset marker to [ ],
+    # ensure a trailing '>> NN' suffix indicating the target sprint.
+    if push_target_map and not DRY_RUN:
+        with open(filepath) as f:
+            current_lines = f.readlines()
+
+        # Rewrite marker -> [ ] and append `>> NN` suffix if missing
+        for i, line in enumerate(current_lines):
+            m = TASK_LINE_PATTERN.match(line)
+            if not m:
+                continue
+            tech_num = m.group(3) or m.group(4)
+            if tech_num not in push_target_map:
+                continue
+            target_sprint = push_target_map[tech_num]
+            new_line = re.sub(r'\[[^\]]+\]', '[ ]', line, count=1)
+            if not SPRINT_OVERRIDE_RE.search(new_line.rstrip("\n")):
+                new_line = new_line.rstrip("\n") + f" >> {target_sprint}\n"
+            current_lines[i] = new_line
+
+        # Move those lines into # Future Projects
+        moved_idxs = []
+        for i, line in enumerate(current_lines):
+            m = TASK_LINE_PATTERN.match(line)
+            if not m:
+                continue
+            tech_num = m.group(3) or m.group(4)
+            if tech_num in push_target_map:
+                moved_idxs.append(i)
+
+        # Pop from bottom up to preserve indices, then insert at Future Projects
+        blocks = []
+        for i in sorted(moved_idxs, reverse=True):
+            blocks.append(current_lines.pop(i))
+        blocks.reverse()
+
+        if blocks:
+            current_lines, insert_idx = _find_future_projects_insert(current_lines)
+            for b in blocks:
+                current_lines.insert(insert_idx, b)
+                insert_idx += 1
+
+        with open(filepath, "w") as f:
+            f.writelines(current_lines)
+        print(f"  Moved {len(blocks)} pushed task(s) to # Future Projects.")
 
     # Move done items to # Done section
     print("MOVE DONE:")
