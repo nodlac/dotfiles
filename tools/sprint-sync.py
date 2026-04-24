@@ -416,6 +416,91 @@ def _find_future_projects_insert(lines):
     return lines, insert_idx + 1
 
 
+# ── Placement memory: remember which section each TECH lives in ──────────
+PLACEMENTS_FILE = os.path.join(SPRINT_DIR, ".placements.json")
+# Sections we never file *into* (pull destinations, done-pile, cruft).
+EXCLUDED_PLACEMENT_HEADINGS = {
+    "# Uncategorized Tasks",
+    "# Done",
+    "# Future Projects",
+}
+
+
+def snapshot_placements(lines):
+    """Return {tech_id: nearest_top_or_H2_heading} for every TECH in `lines`.
+    Skips tasks filed in sections we explicitly ignore."""
+    placements = {}
+    current_heading = None
+    for line in lines:
+        stripped = line.lstrip()
+        # Track headings — prefer deeper (## / ###) over top-level
+        if stripped.startswith("#"):
+            current_heading = line.rstrip()
+            continue
+        m = TASK_LINE_PATTERN.match(line)
+        if m and current_heading:
+            if current_heading in EXCLUDED_PLACEMENT_HEADINGS:
+                continue
+            tech = m.group(3) or m.group(4)
+            placements[tech] = current_heading
+    return placements
+
+
+def load_placements():
+    try:
+        with open(PLACEMENTS_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_placements(mem):
+    os.makedirs(os.path.dirname(PLACEMENTS_FILE), exist_ok=True)
+    with open(PLACEMENTS_FILE, "w") as f:
+        json.dump(mem, f, indent=2, sort_keys=True)
+
+
+def _find_heading_end(lines, heading_text):
+    """Return (heading_idx, end_idx) where end_idx is the line of the next
+    heading at the same-or-higher level. (None, None) if not found."""
+    # Determine heading level
+    level = 0
+    for ch in heading_text.lstrip():
+        if ch == "#":
+            level += 1
+        else:
+            break
+    for i, line in enumerate(lines):
+        if line.rstrip() == heading_text.rstrip():
+            for j in range(i + 1, len(lines)):
+                s = lines[j].lstrip()
+                # Count leading # in candidate heading
+                if s.startswith("#"):
+                    lvl = 0
+                    for ch in s:
+                        if ch == "#": lvl += 1
+                        else: break
+                    if lvl <= level:
+                        return i, j
+            return i, len(lines)
+    return None, None
+
+
+def insert_into_remembered_section(lines, heading_text, task_line):
+    """Insert task_line at the end of the section whose heading matches
+    `heading_text`. Returns (lines, inserted_idx) or (lines, None) if
+    the section isn't present in this file."""
+    start, end = _find_heading_end(lines, heading_text)
+    if start is None:
+        return lines, None
+    # Skip trailing blank lines to keep the insertion tight
+    insert_idx = end
+    while insert_idx > start + 1 and lines[insert_idx - 1].strip() == "":
+        insert_idx -= 1
+    lines.insert(insert_idx, task_line)
+    return lines, insert_idx
+
+
 def organize_future_projects(lines, current_sprint=None):
     """Move `- [ ] NEW_XX` lines to # Future Projects; promote matured
     TECH-XXXX lines back to # Uncategorized Tasks. A TECH line with a
@@ -521,11 +606,14 @@ def _remove_task_block(lines, line_idx):
     return block, remaining
 
 
-def sync_pull(filepath, clickup_tasks, local_tasks, lines):
+def sync_pull(filepath, clickup_tasks, local_tasks, lines, placements=None):
     """Pull new tasks and subtasks from ClickUp into the sprint file.
 
     Also updates task names and re-nests/un-nests tasks when parent changes.
+    If `placements` is provided ({tech_id: heading_text}), new tasks that
+    match a remembered heading are inserted there instead of Uncategorized.
     """
+    placements = placements or {}
 
     # Build internal_id -> tech_num map for parent resolution
     id_to_tech = {}
@@ -644,10 +732,24 @@ def sync_pull(filepath, clickup_tasks, local_tasks, lines):
         print(f"    [ ] TECH-{tech_num} {title}  (subtask)")
         pulled += 1
 
-    # Insert top-level tasks into # Uncategorized Tasks
-    if new_top:
+    # Insert top-level tasks — prefer remembered section, else Uncategorized
+    new_top_for_uncat = []
+    for tech_num, marker, title in new_top:
+        remembered = placements.get(tech_num)
+        if remembered:
+            task_line = format_task_line(tech_num, marker, title)
+            lines, inserted_idx = insert_into_remembered_section(lines, remembered, task_line)
+            if inserted_idx is not None:
+                section_label = remembered.lstrip("# ").rstrip()
+                print(f"    {marker} TECH-{tech_num} {title}  → {section_label}")
+                pulled += 1
+                continue
+        # Section missing in this file — fall through to Uncategorized
+        new_top_for_uncat.append((tech_num, marker, title))
+
+    if new_top_for_uncat:
         lines, insert_idx = _find_uncategorized_insert(lines)
-        for tech_num, marker, title in new_top:
+        for tech_num, marker, title in new_top_for_uncat:
             lines.insert(insert_idx, format_task_line(tech_num, marker, title))
             insert_idx += 1
             print(f"    {marker} TECH-{tech_num} {title}")
@@ -1675,6 +1777,11 @@ def main(target_sprint_num=None):
     print(f"Local TECH tasks found: {len(local_tasks)}")
     print()
 
+    # Placement memory: snapshot where each TECH currently lives, merge
+    # with saved state so newly-filed tasks are remembered for future pulls.
+    placements = load_placements()
+    placements.update(snapshot_placements(lines))
+
     # Resolve any PENDING tasks from prior syncs
     print("RESOLVE PENDING:")
     lines = sync_resolve_pending(lines)
@@ -1708,7 +1815,7 @@ def main(target_sprint_num=None):
 
     # Pull new tasks
     print("PULL:")
-    lines = sync_pull(filepath, clickup_tasks, local_tasks, lines)
+    lines = sync_pull(filepath, clickup_tasks, local_tasks, lines, placements=placements)
     print()
 
     # Create subtasks for child lines without IDs
@@ -1815,6 +1922,13 @@ def main(target_sprint_num=None):
     # Prompt to close any agent sessions tied to done tasks
     if not DRY_RUN:
         check_agent_closeout(done_tech_ids)
+
+    # Refresh placement memory from the final file state
+    if not DRY_RUN:
+        with open(filepath) as f:
+            final_lines = f.readlines()
+        placements.update(snapshot_placements(final_lines))
+        save_placements(placements)
 
     print("Sync complete.")
 
