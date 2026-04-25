@@ -15,7 +15,15 @@ import glob
 import json
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+
+# Force line-buffered stdout so live streaming (nvim jobstart / pipe) shows
+# each print as it happens instead of block-buffering until exit.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except AttributeError:
+    pass
 
 # --- Config ---
 TOKEN = os.environ.get("CLICKUP_TOKEN")
@@ -221,12 +229,50 @@ def resolve_status(target, available):
     return target
 
 
+_remote_task_cache = {}
+
+
 def get_task_by_tech_num(tech_num):
-    """Look up a single task by its TECH-XXXX custom ID. Returns task dict or None."""
+    """Look up a single task by its TECH-XXXX custom ID. Returns task dict or None.
+    Results are cached per-run so repeat lookups are free."""
+    if tech_num in _remote_task_cache:
+        return _remote_task_cache[tech_num]
     data = api("GET", f"/task/TECH-{tech_num}?custom_task_ids=true&team_id={TEAM_ID}")
-    if data and data.get("id"):
-        return data
-    return None
+    result = data if data and data.get("id") else None
+    _remote_task_cache[tech_num] = result
+    return result
+
+
+def get_list_task_tech_ids(list_id):
+    """Authoritative list membership — all TECH ids returned by the list
+    task query (no user filter). Used to detect drift where task.locations
+    says the task is in the list but the list view disagrees."""
+    page = 0
+    ids = set()
+    while True:
+        data = api("GET", f"/list/{list_id}/task?include_closed=true&subtasks=true&page={page}")
+        tasks = (data or {}).get("tasks") or []
+        for t in tasks:
+            cid = (t.get("custom_id") or "").replace("TECH-", "")
+            if cid:
+                ids.add(cid)
+        if len(tasks) < 100:
+            break
+        page += 1
+    return ids
+
+
+def get_tasks_by_tech_nums(tech_nums, max_workers=10):
+    """Parallel fetch for a batch of TECH numbers. Returns {tech_num: task_or_None}."""
+    tech_nums = list(tech_nums)
+    if not tech_nums:
+        return {}
+    # Filter out cached ones
+    to_fetch = [tn for tn in tech_nums if tn not in _remote_task_cache]
+    if to_fetch:
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            list(ex.map(get_task_by_tech_num, to_fetch))
+    return {tn: _remote_task_cache.get(tn) for tn in tech_nums}
 
 
 def get_clickup_tasks(list_id):
@@ -431,10 +477,41 @@ def _find_future_projects_insert(lines):
 
 
 def _find_failed_move_insert(lines):
-    """Return (lines, insert_idx) for lines that can't be sprint-deferred
-    (their ClickUp home list IS the current sprint). Section placed just
-    above # Done."""
-    return _ensure_section_above_done(lines, "# Failed to Move")
+    """Return (lines, insert_idx) for tasks that can't be sprint-deferred
+    via secondary-attach (their ClickUp home list IS the current sprint).
+    Placed ABOVE # Current Sprint so the failure is visible at the top."""
+    start, _ = _find_section_range(lines, "# Failed to Move")
+    if start is not None:
+        return lines, start + 1
+    cs_start, _ = _find_section_range(lines, "# Current Sprint")
+    insert_idx = cs_start if cs_start is not None else len(lines)
+    if insert_idx > 0 and lines[insert_idx - 1].strip() != "":
+        lines[insert_idx:insert_idx] = ["\n"]
+        insert_idx += 1
+    lines[insert_idx:insert_idx] = ["# Failed to Move\n", "\n"]
+    after = insert_idx + 2
+    if after < len(lines) and lines[after].strip() != "":
+        lines[after:after] = ["\n"]
+    return lines, insert_idx + 1
+
+
+def _find_drifted_insert(lines):
+    """Return (lines, insert_idx) for tasks whose ClickUp record claims the
+    current sprint in `locations` but which the sprint list view does NOT
+    include. Placed ABOVE # Current Sprint so drift is visible at the top."""
+    start, _ = _find_section_range(lines, "# Drifted")
+    if start is not None:
+        return lines, start + 1
+    cs_start, _ = _find_section_range(lines, "# Current Sprint")
+    insert_idx = cs_start if cs_start is not None else len(lines)
+    if insert_idx > 0 and lines[insert_idx - 1].strip() != "":
+        lines[insert_idx:insert_idx] = ["\n"]
+        insert_idx += 1
+    lines[insert_idx:insert_idx] = ["# Drifted\n", "\n"]
+    after = insert_idx + 2
+    if after < len(lines) and lines[after].strip() != "":
+        lines[after:after] = ["\n"]
+    return lines, insert_idx + 1
 
 
 def _ensure_section_above_done(lines, heading):
@@ -559,7 +636,7 @@ def sort_sections(lines):
         end = heading_idxs[h_i + 1]
         heading_line = lines[start].rstrip()
         heading_text = heading_line.lstrip("# ").strip()
-        if heading_text in ("Future Projects", "Done", "Failed to Move"):
+        if heading_text in ("Future Projects", "Done", "Failed to Move", "Drifted"):
             continue
 
         is_current = heading_text == "Current Sprint"
@@ -679,8 +756,10 @@ def organize_future_projects(lines, current_sprint=None):
             target = _task_target_sprint(lines[i])
             if target is None:
                 continue
-            if current_sprint is not None and target > current_sprint:
-                continue  # still pending, leave parked
+            # Only mature when we know the current sprint AND target has
+            # arrived. Unknown sprint → never strip [NN] (fail safe).
+            if current_sprint is None or target > current_sprint:
+                continue
             matured.append(i)
         matured_blocks = []
         for i in sorted(matured, reverse=True):
@@ -701,36 +780,49 @@ def organize_future_projects(lines, current_sprint=None):
                     insert_idx += 1
             moved_out = len(matured_blocks)
 
-    # Pass 3: sort parked items by target sprint, blank line between groups
+    # Pass 3: sort parked task blocks (task + nested children) by target
+    # sprint, blank line between cohorts.
     fstart, fend = _find_section_range(lines, "# Future Projects")
     if fstart is not None:
-        parked = []
+        # Find head lines in section, top-down
+        head_entries = []  # (line_idx, sprint_n)
         for i in range(fstart + 1, fend):
             line = lines[i]
-            # NEW_XX gate
             mnew = NEW_TASK_PATTERN.match(line)
-            if mnew and mnew.group(3):
-                parked.append((int(mnew.group(3)), line))
+            if mnew:
+                # NEW_<type> with [NN] marker has digit sprint
+                marker_body = mnew.group(2)
+                if marker_body.isdigit():
+                    head_entries.append((i, int(marker_body)))
                 continue
             target = _task_target_sprint(line)
             if target is not None:
-                parked.append((target, line))
-                continue
+                head_entries.append((i, target))
 
-        if parked:
-            parked.sort(key=lambda x: x[0])
-            # Rebuild section content grouped by sprint
-            new_block = []
+        if head_entries:
+            # Pop blocks bottom-up
+            blocks = []  # (sprint_n, block_lines)
+            for i, sprint_n in sorted(head_entries, key=lambda x: -x[0]):
+                block, lines = _remove_task_block(lines, i)
+                blocks.append((sprint_n, block))
+            blocks.reverse()
+            blocks.sort(key=lambda x: x[0])
+
+            # Rebuild the section: heading + blocks with blank between cohorts
+            new_body = []
             last_sprint = None
-            for sprint_n, line in parked:
+            for sprint_n, block in blocks:
                 if last_sprint is not None and sprint_n != last_sprint:
-                    new_block.append("\n")
-                new_block.append(line)
+                    new_body.append("\n")
+                new_body.extend(block)
                 last_sprint = sprint_n
+            # Trailing blank before next heading
+            if new_body and new_body[-1].strip() != "":
+                new_body.append("\n")
 
-            # Replace old content (between heading and next section)
-            # Preserve the heading line; drop everything else until fend
-            lines = lines[:fstart + 1] + ["\n"] + new_block + ["\n"] + lines[fend:]
+            # Recompute section range after pops and replace body
+            fstart, fend = _find_section_range(lines, "# Future Projects")
+            lines = lines[:fstart + 1] + ["\n"] + new_body + lines[fend:]
 
     tag = "[dry-run] " if DRY_RUN else ""
     if moved_out:
@@ -942,8 +1034,9 @@ def sync_pull(filepath, clickup_tasks, local_tasks, lines, placements=None):
     }
     off_list = [tn for tn in local_tasks if tn not in cu_ids]
     off_list_updates = 0
+    off_remotes = get_tasks_by_tech_nums(off_list)
     for tech_num in off_list:
-        remote = get_task_by_tech_num(tech_num)
+        remote = off_remotes.get(tech_num)
         if not remote:
             continue
         local = local_tasks[tech_num]
@@ -1970,7 +2063,7 @@ Sprint / filing:  [NN] attach to sprint NN (drops to [ ] when promoted)  [topic]
 Create:  NEW_BUG | NEW_CHORE | NEW_FEATURE  (short: NEW_B | NEW_C | NEW_F)  creates in that type's list
 Combo:  [NN] NEW_BUG <title>  creates + attaches to sprint NN (line parked in # Future Projects)
 Pending:  PENDING:<id> awaiting custom ID
-Sections:  # Current Sprint  # <topic>  # Future Projects  # Failed to Move  # Done -->
+Sections:  # Failed to Move  # Drifted  # Current Sprint  # <topic>  # Future Projects  # Done -->
 
 # Current Sprint
 
@@ -2257,37 +2350,88 @@ def main(target_sprint_num=None):
                 in_future.add(m.group(3) or m.group(4))
 
     cu_ids = {(t.get("custom_id") or "").replace("TECH-", "") for t in clickup_tasks if t.get("custom_id")}
+    # Authoritative list membership (unfiltered) — source of truth for what
+    # the sprint list view actually shows.
+    true_list_ids = get_list_task_tech_ids(list_id)
     attached_tech_nums = set()
-    for tech_num, info in local_now.items():
-        if tech_num in cu_ids or tech_num in in_future:
-            continue
-        if info["marker"] in ("[x]", "[c]", "[d]"):
-            continue
-        remote = get_task_by_tech_num(tech_num)
+    drifted_tech_nums = set()
+
+    # Candidates: open local tasks NOT authoritatively in current list, not parked
+    candidates = [
+        tn for tn, info in local_now.items()
+        if tn not in true_list_ids
+        and tn not in in_future
+        and info["marker"] not in ("[x]", "[c]", "[d]")
+    ]
+    # Everything genuinely in the list counts as attached
+    for tn in true_list_ids:
+        if tn in local_now:
+            attached_tech_nums.add(tn)
+
+    remotes = get_tasks_by_tech_nums(candidates)
+
+    # Partition: drifted (locations lies) vs needs-attach
+    to_attach = []
+    for tech_num in candidates:
+        remote = remotes.get(tech_num)
         if not remote:
             print(f"  SKIP TECH-{tech_num}: not in ClickUp")
             continue
-        # Idempotency: skip if task is already in the sprint list
-        # (home list OR secondary 'locations'). cu_ids only sees
-        # tasks assigned to the user, so this covers unassigned cases.
-        remote_list_id = (remote.get("list") or {}).get("id")
         remote_locs = {loc.get("id") for loc in remote.get("locations") or []}
-        if remote_list_id == list_id or list_id in remote_locs:
-            attached_tech_nums.add(tech_num)
+        if list_id in remote_locs:
+            # ClickUp record claims sprint membership but list view disagrees
+            print(f"  DRIFT TECH-{tech_num}: secondary to Sprint {sprint_num} is stale — routing to # Drifted")
+            drifted_tech_nums.add(tech_num)
             continue
-        if DRY_RUN:
-            print(f"  [dry-run] TECH-{tech_num}: attach to Sprint {sprint_num} list")
-            attached_tech_nums.add(tech_num)
-        else:
+        to_attach.append((tech_num, remote))
+
+    if to_attach:
+        def _attach(entry):
+            tn, remote = entry
+            if DRY_RUN:
+                return (tn, True, None)
             res = api("POST", f"/list/{list_id}/task/{remote['id']}")
-            if res is not None:
-                print(f"  TECH-{tech_num}: attached to Sprint {sprint_num} list")
-                attached_tech_nums.add(tech_num)
-            else:
-                print(f"  TECH-{tech_num}: attach failed")
-    if not attached_tech_nums:
+            return (tn, res is not None, None)
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            for tn, ok, _ in ex.map(_attach, to_attach):
+                if ok:
+                    tag = "[dry-run] " if DRY_RUN else ""
+                    print(f"  {tag}TECH-{tn}: attached to Sprint {sprint_num} list")
+                    attached_tech_nums.add(tn)
+                else:
+                    print(f"  TECH-{tn}: attach failed")
+
+    if not attached_tech_nums and not drifted_tech_nums:
         print("  Nothing to attach.")
     print()
+
+    # Move drifted tasks (with children) to # Drifted section
+    if drifted_tech_nums and not DRY_RUN:
+        with open(filepath) as f:
+            current_lines = f.readlines()
+        head_idxs = []
+        for i, line in enumerate(current_lines):
+            m = TASK_LINE_PATTERN.match(line)
+            if not m:
+                continue
+            tech_num = m.group(3) or m.group(4)
+            if tech_num in drifted_tech_nums:
+                head_idxs.append(i)
+        if head_idxs:
+            blocks = []
+            for i in sorted(head_idxs, reverse=True):
+                block, current_lines = _remove_task_block(current_lines, i)
+                blocks.append(block)
+            blocks.reverse()
+            current_lines, d_insert = _find_drifted_insert(current_lines)
+            for block in blocks:
+                for bline in block:
+                    current_lines.insert(d_insert, bline)
+                    d_insert += 1
+            with open(filepath, "w") as f:
+                f.writelines(current_lines)
+            print(f"  Moved {len(blocks)} drifted task(s) to # Drifted section.")
+        print()
 
     # Promote every task attached to the current sprint list into
     # # Current Sprint. Tasks NOT in the current list stay in their
@@ -2309,7 +2453,10 @@ def main(target_sprint_num=None):
             if not m:
                 continue
             tnum = m.group(3) or m.group(4)
-            if tnum in current_ids and m.group(2).strip() not in ("x", "c", "d"):
+            marker_body = m.group(2).strip()
+            # Don't promote closed tasks or tasks deferred via [NN]
+            # (user explicitly targeted a future sprint — leave marker alone).
+            if tnum in current_ids and marker_body not in ("x", "c", "d") and not marker_body.isdigit():
                 to_promote.append(i)
         if to_promote and not DRY_RUN:
             blocks = []
