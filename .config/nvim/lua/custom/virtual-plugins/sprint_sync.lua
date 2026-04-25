@@ -8,7 +8,7 @@ local function open_float(title)
   vim.bo[buf].filetype = 'sprintsync'
   local w = math.floor(vim.o.columns * 0.8)
   local h = math.floor(vim.o.lines * 0.7)
-  local win = vim.api.nvim_open_win(buf, false, {
+  local win = vim.api.nvim_open_win(buf, true, {
     relative = 'editor',
     width = w,
     height = h,
@@ -27,23 +27,33 @@ local function open_float(title)
   return buf, win
 end
 
+-- jobstart chunk semantics: data is split on \n. A trailing '' marks
+-- "final line was complete (ended with \n)"; no trailing '' means the
+-- final element is a partial line to be continued by the next chunk.
 local function append(buf, lines)
   if not lines or #lines == 0 then return end
-  -- Filter trailing empty entry that jobstart emits
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  local ends_with_nl = (lines[#lines] == '')
   local clean = {}
-  for i, l in ipairs(lines) do
-    if not (i == #lines and l == '') then
-      table.insert(clean, l)
-    end
+  for _, l in ipairs(lines) do
+    table.insert(clean, (l:gsub('\r', '')))
+  end
+  if ends_with_nl then
+    table.remove(clean)  -- drop the trailing empty marker
   end
   if #clean == 0 then return end
-  if not vim.api.nvim_buf_is_valid(buf) then return end
   local n = vim.api.nvim_buf_line_count(buf)
   local last = vim.api.nvim_buf_get_lines(buf, n - 1, n, false)[1] or ''
-  -- First chunk concatenates with last line (partial line support)
+  -- First element continues the previous partial line (if any).
+  -- After a chunk that ended with \n we append a trailing empty line,
+  -- so `last` is '' and this concat is a no-op.
   clean[1] = last .. clean[1]
   vim.api.nvim_buf_set_lines(buf, n - 1, n, false, clean)
-  -- Scroll windows showing this buffer to bottom
+  if ends_with_nl then
+    -- Mark buffer "next write starts fresh line" so partial-merge logic
+    -- above does not join unrelated chunks.
+    vim.api.nvim_buf_set_lines(buf, -1, -1, false, { '' })
+  end
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     if vim.api.nvim_win_get_buf(win) == buf then
       vim.api.nvim_win_set_cursor(win, { vim.api.nvim_buf_line_count(buf), 0 })
@@ -52,8 +62,9 @@ local function append(buf, lines)
 end
 
 vim.api.nvim_create_user_command('SprintSync', function(opts)
-  local bufname = vim.api.nvim_buf_get_name(0)
-  local sprint_buf = 0
+  local sprint_buf = vim.api.nvim_get_current_buf()
+  local sprint_win = vim.api.nvim_get_current_win()
+  local bufname = vim.api.nvim_buf_get_name(sprint_buf)
   if not bufname:match('sprint_%d+%.md$') then
     vim.notify('SprintSync: not a sprint file', vim.log.levels.WARN)
     return
@@ -78,7 +89,9 @@ vim.api.nvim_create_user_command('SprintSync', function(opts)
   vim.fn.jobstart(cmd, {
     stdout_buffered = false,
     stderr_buffered = false,
-    pty = true,  -- preserve line breaks + flushing
+    -- PYTHONUNBUFFERED forces per-line flushing on pipe stdout so we can
+    -- stream output live without pty (which corrupts line breaks).
+    env = { PYTHONUNBUFFERED = '1' },
     on_stdout = function(_, data)
       vim.schedule(function() append(log_buf, data) end)
     end,
@@ -87,23 +100,26 @@ vim.api.nvim_create_user_command('SprintSync', function(opts)
     end,
     on_exit = function(_, code)
       vim.schedule(function()
-        append(log_buf, { '', code == 0 and '[done]' or ('[exit ' .. code .. ']') })
-        -- Reload sprint buffer (if still current)
+        append(log_buf, {
+          '',
+          code == 0 and '[done — press <Enter> or q to close]'
+                     or ('[exit ' .. code .. ' — press <Enter> or q to close]'),
+        })
+        -- Reload sprint buffer (re-read from disk) + restore cursor in
+        -- the original sprint window (not the popup).
         if vim.api.nvim_buf_is_valid(sprint_buf) then
-          vim.api.nvim_buf_call(sprint_buf, function() vim.cmd('edit') end)
-          if vim.api.nvim_get_current_buf() == sprint_buf then
-            pcall(vim.fn.winrestview, view)
-            pcall(vim.api.nvim_win_set_cursor, 0, cursor)
+          vim.api.nvim_buf_call(sprint_buf, function() vim.cmd('checktime') end)
+          if vim.api.nvim_win_is_valid(sprint_win) then
+            pcall(vim.api.nvim_win_call, sprint_win, function()
+              vim.fn.winrestview(view)
+              pcall(vim.api.nvim_win_set_cursor, sprint_win, cursor)
+            end)
           end
         end
-        if code == 0 then
-          vim.defer_fn(function()
-            if vim.api.nvim_win_is_valid(log_win) then
-              vim.api.nvim_win_close(log_win, true)
-            end
-          end, 1500)
-        else
-          vim.notify('sprint-sync: failed (exit ' .. code .. ') — press q to close log', vim.log.levels.ERROR)
+        -- Stay open; user closes with <Enter> or q
+        if vim.api.nvim_buf_is_valid(log_buf) then
+          vim.keymap.set('n', '<CR>', '<cmd>close<CR>',
+            { buffer = log_buf, nowait = true, silent = true })
         end
       end)
     end,
