@@ -23,6 +23,7 @@ vim.fn.matchadd('CbBlocked',  '\\[\\~\\]', 20) -- blocked/dependent
 vim.fn.matchadd('CbAlt',      '\\[a\\]', 20)   -- alternative
 vim.fn.matchadd('CbCode',     '\\[c\\]', 20)   -- in code
 vim.fn.matchadd('CbDefer',    '\\[d\\]', 20)   -- delegated/deferred
+vim.fn.matchadd('CbDefer',    '\\[FF\\]', 20)  -- parked for undecided future sprint
 
 -- TECH ticket references — inherit color from checkbox on same line
 vim.api.nvim_set_hl(0, 'TechId', { fg = '#c0caf5' })  -- fallback: text white

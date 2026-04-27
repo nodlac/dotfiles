@@ -25,6 +25,7 @@ local STATUS_ITEMS = {
   { label = "~",  detail = "blocked / waiting" },
   { label = "!",  detail = "urgent"         },
   { label = "NN", detail = "attach to sprint NN — replace NN with digits" },
+  { label = "FF", detail = "park for future (undecided sprint)" },
 }
 
 local function in_bracket_context()
