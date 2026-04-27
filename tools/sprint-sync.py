@@ -73,23 +73,27 @@ TASK_LINE_PATTERN = re.compile(
 )
 # Creation lists (one per task type — task type = folder/list membership)
 NEW_TYPE_LIST = {
-    "BUG":     "901109915076",
-    "B":       "901109915076",
-    "CHORE":   "901109915070",
-    "C":       "901109915070",
-    "FEATURE": "901109915057",
-    "F":       "901109915057",
+    "BUG":       "901109915076",
+    "B":         "901109915076",
+    "CHORE":     "901109915070",
+    "C":         "901109915070",
+    "FEATURE":   "901109915057",
+    "F":         "901109915057",
+    "ANALYTICS": "901113670875",
+    "A":         "901113670875",
 }
 # Pretty name for log output
 NEW_TYPE_NAME = {
-    "BUG": "bug", "B": "bug",
-    "CHORE": "chore", "C": "chore",
+    "BUG": "bug",         "B": "bug",
+    "CHORE": "chore",     "C": "chore",
     "FEATURE": "feature", "F": "feature",
+    "ANALYTICS": "analytics", "A": "analytics",
 }
-# NEW_BUG / NEW_B / NEW_CHORE / NEW_C / NEW_FEATURE / NEW_F
+# NEW_BUG / NEW_B / NEW_CHORE / NEW_C / NEW_FEATURE / NEW_F / NEW_ANALYTICS / NEW_A
 # Raw "NEW " without a type is rejected (must pick a type list)
+# Long aliases listed before short ones so ANALYTICS matches before A.
 NEW_TASK_PATTERN = re.compile(
-    r"^(\s*-\s*)\[([^\]]+)\]\s+NEW_(BUG|B|CHORE|C|FEATURE|F)\b\s+(.*)",
+    r"^(\s*-\s*)\[([^\]]+)\]\s+NEW_(ANALYTICS|BUG|CHORE|FEATURE|A|B|C|F)\b\s+(.*)",
     re.IGNORECASE,
 )
 # Bare NEW (no type) — reported as error so user fixes the line
@@ -98,11 +102,11 @@ BARE_NEW_PATTERN = re.compile(
 )
 # For tasks created but awaiting custom_id assignment
 PENDING_TASK_PATTERN = re.compile(
-    r"^(\s*-\s*)\[(.)\]\s+PENDING:(\w+)\s+(.*)"
+    r"^(\s*-\s*)\[([^\]]+)\]\s+PENDING:(\w+)\s+(.*)"
 )
 # Matches child lines explicitly marked NEW (candidate subtasks to create)
 CHILD_TASK_PATTERN = re.compile(
-    r"^(\s{8,}-\s*)\[(.)\]\s+NEW\s+(.*)"
+    r"^(\s{8,}-\s*)\[([^\]]+)\]\s+NEW\s+(.*)"
 )
 
 
@@ -727,13 +731,15 @@ def sort_sections(lines):
 
 def _task_target_sprint(line):
     """Return target sprint NN for a TECH task line, or None.
-    Prefers [NN] marker; falls back to legacy `>> NN` suffix."""
+    [NN] -> int, [FF] -> float('inf') (undecided future), legacy `>> NN`."""
     m = TASK_LINE_PATTERN.match(line)
     if not m:
         return None
     marker_body = m.group(2)
     if marker_body.isdigit():
         return int(marker_body)
+    if marker_body == "FF":
+        return float("inf")
     override = SPRINT_OVERRIDE_RE.search(line.rstrip("\n"))
     if override:
         return int(override.group(1))
@@ -1111,7 +1117,7 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
         local_marker = local["marker"]
         target_status = MARKER_TO_STATUS.get(local_marker)
 
-        # Detect digit marker [NN] as push-to-sprint-NN
+        # Detect digit marker [NN] as push-to-sprint-NN, [FF] as park-future
         marker_sprint_override = None
         file_topic = None
         if target_status is None:
@@ -1119,6 +1125,8 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
             if mnum:
                 marker_sprint_override = int(mnum.group(1))
                 target_status = "__push_sprint__"
+            elif local_marker == "[FF]":
+                target_status = "__park_future__"
             else:
                 # Multi-char alpha marker → file to matching section
                 mtopic = re.fullmatch(r'\[([A-Za-z][A-Za-z0-9 _\-]*)\]', local_marker)
@@ -1135,6 +1143,23 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
             pushed += 1
             continue
 
+        if target_status == "__park_future__":
+            # [FF] = future, undecided. Best-effort detach from current
+            # sprint list (only succeeds if not the home list); record for
+            # local relocation to # Future Projects with infinite sort key
+            # so it sits after numbered cohorts.
+            if not DRY_RUN and list_id:
+                if tech_num not in cu_lookup:
+                    fetched = get_task_by_tech_num(tech_num)
+                    if fetched:
+                        cu_lookup[tech_num] = fetched
+                if tech_num in cu_lookup:
+                    api("DELETE", f"/list/{list_id}/task/{cu_lookup[tech_num]['id']}")
+            push_target_map[tech_num] = float("inf")
+            print(f"  TECH-{tech_num}: parked for future (undecided sprint)")
+            pushed += 1
+            continue
+
         if target_status == "__push_sprint__":
             target_sprint = marker_sprint_override
             if current_sprint_num is not None and target_sprint <= current_sprint_num:
@@ -1147,7 +1172,11 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
             target_list_id, target_list_name = sprint_list_cache[target_sprint]
 
             if target_list_id is None:
-                print(f"  SKIP TECH-{tech_num}: Sprint {target_sprint} has no ClickUp list yet")
+                # Target sprint's ClickUp list doesn't exist yet, but the
+                # local intent is clear: park in # Future Projects.
+                print(f"  TECH-{tech_num}: Sprint {target_sprint} list not yet created — parking locally only")
+                push_target_map[tech_num] = target_sprint
+                pushed += 1
                 continue
 
             if tech_num not in cu_lookup:
@@ -1409,7 +1438,8 @@ def sync_create(filepath, lines, clickup_tasks=None):
             existing_by_title[t["name"].strip()] = cid
 
     created = 0
-    future_line_idxs = []  # indices of [NN] lines to relocate to Future Projects
+    future_line_idxs = []   # indices of [NN]/[FF] lines → # Future Projects
+    current_line_idxs = []  # indices of PENDING [ ] lines → # Current Sprint
     sprint_cache = {}  # target_sprint -> (list_id, list_name)
     for i, line in enumerate(lines):
         # Flag bare NEW (no type) and skip
@@ -1433,27 +1463,33 @@ def sync_create(filepath, lines, clickup_tasks=None):
         type_list_id = NEW_TYPE_LIST[type_key]
         indent_clean = indent.rstrip("- ") or "    "
 
-        # Marker [NN] → digit = target sprint. Otherwise marker → status.
+        # Marker [NN] → digit = target sprint. [FF] → park, no attach.
+        # Otherwise marker → status (and attach to current sprint).
         target_sprint = None
+        park_future = False
         if marker_body.isdigit():
             target_sprint = int(marker_body)
             if current_sprint is not None and target_sprint <= current_sprint:
                 print(f"  ERROR line {i+1}: [{target_sprint}] must be > current sprint {current_sprint}")
                 continue
             target_status = "to do"
+        elif marker_body == "FF":
+            park_future = True
+            target_status = "to do"
         else:
             target_status = MARKER_TO_STATUS.get(marker, "to do")
 
         # Decide which sprint list to attach as secondary
-        attach_sprint = target_sprint if target_sprint is not None else current_sprint
         attach_list_id, attach_list_name = None, None
-        if attach_sprint is not None:
-            if attach_sprint == current_sprint and sprint_list_id:
-                attach_list_id, attach_list_name = sprint_list_id, f"Sprint {current_sprint}"
-            else:
-                if attach_sprint not in sprint_cache:
-                    sprint_cache[attach_sprint] = find_clickup_sprint_list(attach_sprint)
-                attach_list_id, attach_list_name = sprint_cache[attach_sprint]
+        if not park_future:
+            attach_sprint = target_sprint if target_sprint is not None else current_sprint
+            if attach_sprint is not None:
+                if attach_sprint == current_sprint and sprint_list_id:
+                    attach_list_id, attach_list_name = sprint_list_id, f"Sprint {current_sprint}"
+                else:
+                    if attach_sprint not in sprint_cache:
+                        sprint_cache[attach_sprint] = find_clickup_sprint_list(attach_sprint)
+                    attach_list_id, attach_list_name = sprint_cache[attach_sprint]
 
         if DRY_RUN:
             extra = f" → {attach_list_name}" if attach_list_id else ""
@@ -1467,7 +1503,7 @@ def sync_create(filepath, lines, clickup_tasks=None):
             tech_num = existing_id.replace("TECH-", "")
             lines[i] = format_task_line(tech_num, marker, title, indent_clean)
             print(f"  Reused existing TECH-{tech_num}: {title}")
-            if target_sprint is not None:
+            if target_sprint is not None or park_future:
                 future_line_idxs.append(i)
             created += 1
             continue
@@ -1492,23 +1528,32 @@ def sync_create(filepath, lines, clickup_tasks=None):
             res = api("POST", f"/list/{attach_list_id}/task/{task_id}")
             if res is not None:
                 attached_msg = f" → {attach_list_name}"
-        elif attach_sprint is not None:
-            print(f"  WARN: Sprint {attach_sprint} list missing — created but not attached")
+        elif park_future:
+            attached_msg = " (parked, no sprint)"
+        elif not park_future and attach_list_id is None:
+            # only warn for non-park flows when sprint list lookup failed
+            attach_sprint = target_sprint if target_sprint is not None else current_sprint
+            if attach_sprint is not None:
+                print(f"  WARN: Sprint {attach_sprint} list missing — created but not attached")
 
         if custom_id:
             tech_num = custom_id.replace("TECH-", "")
             lines[i] = format_task_line(tech_num, marker, title, indent_clean)
             print(f"  Created TECH-{tech_num} ({NEW_TYPE_NAME[type_key]}): {title}{attached_msg}")
-            if target_sprint is not None:
+            if target_sprint is not None or park_future:
                 future_line_idxs.append(i)
             created += 1
         else:
             lines[i] = format_pending_line(task_id, marker, title, indent_clean)
             print(f"  WARNING: created ({NEW_TYPE_NAME[type_key]}) but no custom ID yet: {title}")
             print(f"           Saved as PENDING:{task_id} — will resolve on next sync.")
+            if target_sprint is not None or park_future:
+                future_line_idxs.append(i)
+            else:
+                current_line_idxs.append(i)
             created += 1
 
-    # Relocate [NN] NEW_* creations to # Future Projects (with children)
+    # Relocate [NN]/[FF] new creations to # Future Projects (with children)
     if future_line_idxs and not DRY_RUN:
         blocks = []
         for i in sorted(future_line_idxs, reverse=True):
@@ -1520,7 +1565,22 @@ def sync_create(filepath, lines, clickup_tasks=None):
             for bline in block:
                 lines.insert(fp_insert, bline)
                 fp_insert += 1
-        print(f"  Moved {len(blocks)} new [NN] task(s) to # Future Projects.")
+        print(f"  Moved {len(blocks)} new [NN]/[FF] task(s) to # Future Projects.")
+
+    # Relocate plain PENDING creations to # Current Sprint so the user
+    # sees newly-created (id-pending) tasks in the active bucket.
+    if current_line_idxs and not DRY_RUN:
+        blocks = []
+        for i in sorted(current_line_idxs, reverse=True):
+            block, lines = _remove_task_block(lines, i)
+            blocks.append(block)
+        blocks.reverse()
+        lines, cs_insert = _find_uncategorized_insert(lines)
+        for block in blocks:
+            for bline in block:
+                lines.insert(cs_insert, bline)
+                cs_insert += 1
+        print(f"  Moved {len(blocks)} PENDING task(s) to # Current Sprint.")
 
     if created == 0:
         print("  No NEW tasks to create.")
@@ -2059,8 +2119,8 @@ tags:
 clickup_list_id: "{list_id}"
 ---
 <!-- Markers:  [ ] todo  [/] in progress  [>] qa  [~] blocked  [!] urgent  [x] done  [c] closed  [d] delete
-Sprint / filing:  [NN] attach to sprint NN (drops to [ ] when promoted)  [topic] file under ## topic heading
-Create:  NEW_BUG | NEW_CHORE | NEW_FEATURE  (short: NEW_B | NEW_C | NEW_F)  creates in that type's list
+Sprint / filing:  [NN] attach to sprint NN  [FF] park for future (undecided sprint)  [topic] file under ## topic heading
+Create:  NEW_BUG | NEW_CHORE | NEW_FEATURE | NEW_ANALYTICS  (short: NEW_B | NEW_C | NEW_F | NEW_A)  creates in that type's list
 Combo:  [NN] NEW_BUG <title>  creates + attaches to sprint NN (line parked in # Future Projects)
 Pending:  PENDING:<id> awaiting custom ID
 Sections:  # Failed to Move  # Drifted  # Current Sprint  # <topic>  # Future Projects  # Done -->
@@ -2211,38 +2271,47 @@ def main(target_sprint_num=None):
         with open(filepath) as f:
             current_lines = f.readlines()
         relocated = 0
-        cstart, cend = _find_section_range(current_lines, "# Current Sprint")
+        # Scope: only sync-managed sections — # Current Sprint, # Drifted,
+        # # Failed to Move. Tasks already filed in user topic sections stay
+        # there; placement memory will restore them on promotion.
+        scope_ranges = []
+        for h in ("# Current Sprint", "# Drifted", "# Failed to Move"):
+            s, e = _find_section_range(current_lines, h)
+            if s is not None:
+                scope_ranges.append((s, e))
+        def _in_scope(i):
+            return any(s <= i < e for s, e in scope_ranges)
 
-        if cstart is not None:
-            to_move_idxs = []
-            for i in range(cstart + 1, cend):
-                m = TASK_LINE_PATTERN.match(current_lines[i])
-                if not m:
-                    continue
-                tech_num = m.group(3) or m.group(4)
-                if tech_num not in push_target_map:
-                    continue
-                target_sprint = push_target_map[tech_num]
-                if sprint_num is None or target_sprint > sprint_num:
-                    to_move_idxs.append(i)
-            if to_move_idxs:
-                # Pop blocks (task + children) bottom-up to preserve indices
-                blocks = []
-                for i in sorted(to_move_idxs, reverse=True):
-                    block, current_lines = _remove_task_block(current_lines, i)
-                    blocks.append(block)
-                blocks.reverse()
-                current_lines, fp_insert = _find_future_projects_insert(current_lines)
-                for block in blocks:
-                    for bline in block:
-                        current_lines.insert(fp_insert, bline)
-                        fp_insert += 1
-                relocated = len(blocks)
+        to_move_idxs = []
+        for i, line in enumerate(current_lines):
+            if not _in_scope(i):
+                continue
+            m = TASK_LINE_PATTERN.match(line)
+            if not m:
+                continue
+            tech_num = m.group(3) or m.group(4)
+            if tech_num not in push_target_map:
+                continue
+            target_sprint = push_target_map[tech_num]
+            if sprint_num is None or target_sprint > sprint_num:
+                to_move_idxs.append(i)
+        if to_move_idxs:
+            blocks = []
+            for i in sorted(to_move_idxs, reverse=True):
+                block, current_lines = _remove_task_block(current_lines, i)
+                blocks.append(block)
+            blocks.reverse()
+            current_lines, fp_insert = _find_future_projects_insert(current_lines)
+            for block in blocks:
+                for bline in block:
+                    current_lines.insert(fp_insert, bline)
+                    fp_insert += 1
+            relocated = len(blocks)
 
         if relocated:
             with open(filepath, "w") as f:
                 f.writelines(current_lines)
-            print(f"  Moved {relocated} [NN]-marked task(s) from # Current Sprint to # Future Projects.")
+            print(f"  Moved {relocated} [NN]-marked task(s) to # Future Projects.")
 
     # Failed-to-move: [NN] applied to a task whose ClickUp home IS the
     # current sprint list. Secondary-attach can't truly defer it, so route
@@ -2356,12 +2425,17 @@ def main(target_sprint_num=None):
     attached_tech_nums = set()
     drifted_tech_nums = set()
 
-    # Candidates: open local tasks NOT authoritatively in current list, not parked
+    # Candidates: open local tasks NOT authoritatively in current list,
+    # not parked in Future Projects, and NOT explicitly deferred via
+    # [NN] / [FF] — those belong to a future sprint, not this one.
+    def _is_future_marker(mk):
+        return bool(re.fullmatch(r'\[\d+\]', mk)) or mk == "[FF]"
     candidates = [
         tn for tn, info in local_now.items()
         if tn not in true_list_ids
         and tn not in in_future
         and info["marker"] not in ("[x]", "[c]", "[d]")
+        and not _is_future_marker(info["marker"])
     ]
     # Everything genuinely in the list counts as attached
     for tn in true_list_ids:
@@ -2454,9 +2528,11 @@ def main(target_sprint_num=None):
                 continue
             tnum = m.group(3) or m.group(4)
             marker_body = m.group(2).strip()
-            # Don't promote closed tasks or tasks deferred via [NN]
+            # Don't promote closed tasks or tasks deferred via [NN] / [FF]
             # (user explicitly targeted a future sprint — leave marker alone).
-            if tnum in current_ids and marker_body not in ("x", "c", "d") and not marker_body.isdigit():
+            if (tnum in current_ids
+                    and marker_body not in ("x", "c", "d", "FF")
+                    and not marker_body.isdigit()):
                 to_promote.append(i)
         if to_promote and not DRY_RUN:
             blocks = []
