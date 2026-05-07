@@ -70,7 +70,30 @@ vim.api.nvim_create_user_command('SprintSync', function(opts)
     return
   end
 
-  vim.cmd('write')
+  -- Save the sprint buffer first so unsaved changes don't get clobbered
+  -- when sync writes back to disk. Also save any other modified buffers
+  -- pointing at sprint files (in case user edits in splits).
+  local save_ok, save_err = pcall(function()
+    vim.api.nvim_buf_call(sprint_buf, function() vim.cmd('silent write') end)
+  end)
+  if not save_ok then
+    vim.notify('SprintSync: failed to save buffer — aborting (' .. tostring(save_err) .. ')',
+      vim.log.levels.ERROR)
+    return
+  end
+  if vim.bo[sprint_buf].modified then
+    vim.notify('SprintSync: buffer still has unsaved changes — aborting', vim.log.levels.ERROR)
+    return
+  end
+  -- Also flush any other modified sprint buffers
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    if b ~= sprint_buf and vim.api.nvim_buf_is_loaded(b) and vim.bo[b].modified then
+      local n = vim.api.nvim_buf_get_name(b)
+      if n:match('sprint_%d+%.md$') then
+        pcall(vim.api.nvim_buf_call, b, function() vim.cmd('silent write') end)
+      end
+    end
+  end
 
   local cmd = { vim.fn.expand('~/tools/sprint-sync') }
   for _, arg in ipairs(opts.fargs) do
