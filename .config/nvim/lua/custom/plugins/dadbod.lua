@@ -39,6 +39,25 @@ return {
         pattern = 'dbui',
         callback = function()
           vim.keymap.set('n', 't', '<Plug>(DBUI_SelectLine)', { buffer = true, desc = 'DBUI toggle' })
+          -- < closes an expanded node, > opens a collapsed one. dadbod-ui
+          -- only exposes a toggle plug, so check expansion state on the
+          -- current line and only act in the requested direction.
+          local function dbui_dir(open)
+            local line = vim.fn.getline('.')
+            -- Expanded nodes render with a "down" glyph (▾, ▼, ↓ depending
+            -- on font); collapsed with a "right" glyph (▸, ▶, →). Use the
+            -- nerd-font icons dadbod-ui ships with by default.
+            local is_expanded = line:match('[▾▼↓]') ~= nil
+            if open and not is_expanded then
+              vim.cmd('execute "normal \\<Plug>(DBUI_SelectLine)"')
+            elseif (not open) and is_expanded then
+              vim.cmd('execute "normal \\<Plug>(DBUI_SelectLine)"')
+            end
+          end
+          vim.keymap.set('n', '<', function() dbui_dir(false) end,
+            { buffer = true, desc = 'DBUI close expanded node' })
+          vim.keymap.set('n', '>', function() dbui_dir(true) end,
+            { buffer = true, desc = 'DBUI open collapsed node' })
           vim.keymap.set('n', 'r', function()
             local line = vim.fn.getline('.')
             for _, name in ipairs(db_names) do
@@ -65,6 +84,106 @@ return {
       vim.keymap.set('n', '<leader><CR>', 'vip:DB<cr>', { desc = 'Run SQL block' })
       vim.keymap.set('n', '<S-CR>', 'vip:DB<cr>', { desc = 'Run SQL block' })
       vim.keymap.set('i', '<S-CR>', '<Esc>vip:DB<cr>', { desc = 'Run SQL block' })
+
+      -- ── Fuzzy table search across all configured DBs ────────────────────
+      -- Telescope picker over `db / table` — type freely, results match
+      -- via subsequence ("contentuser" → "content_request_user").
+      -- :DBFindTable          uses cache (fast)
+      -- :DBFindTable!         force refresh (re-queries each DB)
+      local table_cache = {}  -- db_name -> { "schema.table", ... }
+
+      local function fetch_tables(db)
+        ensure_tunnel(db.name)
+        local ok, result = pcall(vim.fn['db#adapter#call'], db.url, 'tables', {}, {})
+        if ok and type(result) == 'table' then
+          return result
+        end
+        return {}
+      end
+
+      local function load_all_tables(force)
+        for _, db in ipairs(vim.g.dbs or {}) do
+          if force or not table_cache[db.name] then
+            vim.notify('Loading tables for ' .. db.name .. '…', vim.log.levels.INFO)
+            table_cache[db.name] = fetch_tables(db)
+          end
+        end
+      end
+
+      local function pick_table(force)
+        load_all_tables(force)
+        local items = {}
+        for db_name, tables in pairs(table_cache) do
+          for _, t in ipairs(tables) do
+            table.insert(items, db_name .. '  /  ' .. t)
+          end
+        end
+        if #items == 0 then
+          vim.notify('No tables loaded — check tunnels and credentials', vim.log.levels.WARN)
+          return
+        end
+        local has_telescope, _ = pcall(require, 'telescope.pickers')
+        if not has_telescope then
+          vim.notify('Telescope not available', vim.log.levels.ERROR)
+          return
+        end
+        local pickers = require('telescope.pickers')
+        local finders = require('telescope.finders')
+        local conf = require('telescope.config').values
+        local actions = require('telescope.actions')
+        local action_state = require('telescope.actions.state')
+        pickers.new({}, {
+          prompt_title = 'DB Tables',
+          finder = finders.new_table { results = items },
+          sorter = conf.generic_sorter({}),
+          attach_mappings = function(prompt_bufnr)
+            actions.select_default:replace(function()
+              local sel = action_state.get_selected_entry()
+              actions.close(prompt_bufnr)
+              if not sel then return end
+              local db_name, tbl = sel[1]:match('^(.-)%s+/%s+(.+)$')
+              if not db_name or not tbl then return end
+              local url
+              for _, db in ipairs(vim.g.dbs or {}) do
+                if db.name == db_name then url = db.url; break end
+              end
+              if not url then return end
+              if not url or url == '' then
+                vim.notify('No URL for ' .. db_name .. ' (env var empty?)',
+                  vim.log.levels.ERROR)
+                return
+              end
+              ensure_tunnel(db_name)
+              -- Open new buffer with explicit syntax so b:db lives in the
+              -- right buffer. vim.cmd('let') is the most direct way to
+              -- set a buffer-local var that dadbod will see.
+              vim.cmd('new')
+              local newbuf = vim.api.nvim_get_current_buf()
+              vim.bo[newbuf].filetype = 'sql'
+              vim.api.nvim_buf_set_lines(newbuf, 0, -1, false, {
+                '-- ' .. db_name .. ' / ' .. tbl,
+                '-- Date: ' .. os.date('%Y-%m-%d'),
+                '',
+                'SELECT *',
+                'FROM ' .. tbl,
+                'LIMIT 500;',
+              })
+              -- Use vim's `let` directly — survives any plugin that
+              -- inspects b:db during buffer init.
+              vim.cmd(string.format('let b:db = %s', vim.fn.string(url)))
+              pcall(vim.api.nvim_win_set_cursor, 0, { 4, 7 })
+            end)
+            return true
+          end,
+        }):find()
+      end
+
+      vim.api.nvim_create_user_command('DBFindTable', function(opts)
+        pick_table(opts.bang)
+      end, { bang = true, desc = 'Fuzzy-find table across all DBs (! refreshes cache)' })
+
+      vim.keymap.set('n', '<leader>rt', '<cmd>DBFindTable<cr>',
+        { desc = 'DB find table (fuzzy)' })
 
       -- Insert template into new DBUI query buffers
       -- DBUI buffers have no .sql extension, so match on FileType instead

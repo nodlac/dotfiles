@@ -803,7 +803,7 @@ require('lazy').setup({
     },
     opts = {
       notify_on_error = false,
-      format_on_save = false,
+      format_on_save = true,
       -- function(bufnr)
       --   -- Disable "format_on_save lsp_fallback" for languages that don't
       --   -- have a well standardized coding style. You can add additional
@@ -823,7 +823,7 @@ require('lazy').setup({
         css = { 'prettier' },
         less = { 'eslint_d', 'prettier' },
         html = { 'prettier' },
-        python = { 'yapf', 'isort' },
+        python = { 'ruff', 'yapf' },
         go = { 'gopls' },
         javascript = { 'eslint_d', 'prettier', stop_after_first = true },
         jsx = { 'eslint_d', 'prettier', stop_after_first = true },
@@ -934,14 +934,11 @@ require('lazy').setup({
 
       snippets = { preset = 'luasnip' },
 
-      -- Blink.cmp includes an optional, recommended rust fuzzy matcher,
-      -- which automatically downloads a prebuilt binary when enabled.
-      --
-      -- By default, we use the Lua implementation instead, but you may enable
-      -- the rust implementation via `'prefer_rust_with_warning'`
-      --
-      -- See :h blink-cmp-config-fuzzy for more information
-      fuzzy = { implementation = 'lua' },
+      -- Rust fuzzy matcher gives fzf-style subsequence ranking (e.g.
+      -- "contentuser" → "content_request_user"). Lua impl is stricter
+      -- and feels prefix-y. prefer_rust_with_warning falls back to Lua
+      -- if the prebuilt binary download fails.
+      fuzzy = { implementation = 'prefer_rust_with_warning' },
 
       -- Shows a signature help window while you type arguments for a function
       signature = { enabled = true },
