@@ -52,7 +52,11 @@ When in doubt between `review` and `done`, use `review`.
 
 ### Testing checklist
 
-When moving to `review` or `testing`, write a testing checklist to `~/notes/work_notes/testing-checklists/<TECH-ID>-<short-slug>.md` (or `<session-name>.md` if no task ID). Skip this for analytics tasks (Type=`analytics` in agents.csv) — their deliverable is the analysis itself, not something a reviewer re-runs.
+**FIRST — check the `Type` column for your session in `~/.agents/agents.csv`. If `Type=analytics`, DO NOT create a testing checklist file. The deliverable is the analysis itself; a checklist is noise. This is non-negotiable.**
+
+For every other type, when moving to `review` or `testing`, write a testing checklist to `~/notes/work_notes/testing-checklists/<TECH-ID>-<short-slug>.md` (or `<session-name>.md` if no task ID).
+
+`agent-update review` / `agent-update testing` prints the right recommendation (skip vs. target path) for your row — let that line guide you.
 
 Keep it focused on what a human should verify, not a replay of what you did. Include:
 
