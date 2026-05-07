@@ -13,10 +13,30 @@ import re
 import sys
 import glob
 import json
+import tempfile
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+
+
+def atomic_write(path, content):
+    """Write content (str or list of lines) atomically via tempfile + rename.
+    Prevents file truncation if the script crashes mid-write."""
+    if isinstance(content, list):
+        content = "".join(content)
+    target_dir = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".sprint-sync-", suffix=".tmp", dir=target_dir)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 # Force line-buffered stdout so live streaming (nvim jobstart / pipe) shows
 # each print as it happens instead of block-buffering until exit.
@@ -1113,6 +1133,16 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
     file_to_section_map = {}
     failed_move_tech_nums = set()
 
+    # Pre-warm cache: every [NN] / [FF] task needs a remote fetch.
+    # Parallelizing this is a big win when many tasks were deferred.
+    deferred_tns = [
+        tn for tn, info in local_tasks.items()
+        if (re.fullmatch(r'\[\d+\]', info["marker"]) or info["marker"] == "[FF]")
+        and tn not in cu_lookup
+    ]
+    if deferred_tns:
+        get_tasks_by_tech_nums(deferred_tns)
+
     for tech_num, local in local_tasks.items():
         local_marker = local["marker"]
         target_status = MARKER_TO_STATUS.get(local_marker)
@@ -1146,17 +1176,17 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
         if target_status == "__park_future__":
             # [FF] = future, undecided. Best-effort detach from current
             # sprint list (only succeeds if not the home list); record for
-            # local relocation to # Future Projects with infinite sort key
-            # so it sits after numbered cohorts.
+            # local relocation to # Future Projects with infinite sort key.
             if not DRY_RUN and list_id:
                 if tech_num not in cu_lookup:
                     fetched = get_task_by_tech_num(tech_num)
                     if fetched:
                         cu_lookup[tech_num] = fetched
                 if tech_num in cu_lookup:
-                    api("DELETE", f"/list/{list_id}/task/{cu_lookup[tech_num]['id']}")
+                    remote_locs = {loc.get("id") for loc in cu_lookup[tech_num].get("locations") or []}
+                    if list_id in remote_locs:
+                        api("DELETE", f"/list/{list_id}/task/{cu_lookup[tech_num]['id']}")
             push_target_map[tech_num] = float("inf")
-            print(f"  TECH-{tech_num}: parked for future (undecided sprint)")
             pushed += 1
             continue
 
@@ -1197,14 +1227,33 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
                 pushed += 1
                 continue
 
+            # Idempotency: if the task is already attached to target sprint
+            # and not in the current sprint list, skip POST + DELETE.
+            remote_locs = {loc.get("id") for loc in cu_lookup[tech_num].get("locations") or []}
+            already_in_target = target_list_id in remote_locs
+            still_in_current = bool(list_id) and list_id in remote_locs
+
+            if already_in_target and not still_in_current:
+                push_target_map[tech_num] = target_sprint
+                pushed += 1
+                continue
+
             if DRY_RUN:
-                print(f"  [dry-run] TECH-{tech_num}: attach to Sprint {target_sprint}, reset marker")
+                action = []
+                if not already_in_target: action.append(f"attach to Sprint {target_sprint}")
+                if still_in_current: action.append("detach from current")
+                print(f"  [dry-run] TECH-{tech_num}: " + ", ".join(action))
                 push_target_map[tech_num] = target_sprint
                 pushed += 1
             else:
-                result = api("POST", f"/list/{target_list_id}/task/{cu_lookup[tech_num]['id']}")
-                if result is not None:
-                    print(f"  TECH-{tech_num}: attached to Sprint {target_sprint} ({target_list_name})")
+                attach_ok = already_in_target  # already there counts as success
+                if not already_in_target:
+                    result = api("POST", f"/list/{target_list_id}/task/{cu_lookup[tech_num]['id']}")
+                    attach_ok = result is not None
+                if attach_ok:
+                    if still_in_current:
+                        api("DELETE", f"/list/{list_id}/task/{cu_lookup[tech_num]['id']}")
+                    print(f"  TECH-{tech_num}: moved to Sprint {target_sprint} ({target_list_name})")
                     push_target_map[tech_num] = target_sprint
                     pushed += 1
                 else:
@@ -1996,8 +2045,7 @@ def sprint_rollover(from_num=None, to_num=None):
         done_in_source = sum(1 for l in body if DONE_MARKER.match(l))
         print(f"  Tasks carried over: {task_count} (stripped {done_in_source} completed)")
     else:
-        with open(to_path, "w") as f:
-            f.writelines(result)
+        atomic_write(to_path, result)
         task_count = sum(1 for l in filtered if TASK_MARKER.match(l))
         done_in_source = sum(1 for l in body if DONE_MARKER.match(l))
         print(f"  Carried over {task_count} tasks (stripped {done_in_source} completed)")
@@ -2131,8 +2179,7 @@ Sections:  # Failed to Move  # Drifted  # Current Sprint  # <topic>  # Future Pr
 
 # Done
 """
-    with open(target_path, "w") as f:
-        f.write(content)
+    atomic_write(target_path, content)
 
     print(f"Created sprint_{sprint_num}.md (list: {list_id})")
 
@@ -2187,16 +2234,14 @@ def main(target_sprint_num=None):
     lines = sync_resolve_pending(lines)
     print()
     if not DRY_RUN:
-        with open(filepath, "w") as f:
-            f.writelines(lines)
+        atomic_write(filepath, lines)
 
     # Park deferred NEW_XX tasks under # Future Projects
     print("ORGANIZE FUTURE:")
     lines = organize_future_projects(lines, current_sprint=sprint_num)
     print()
     if not DRY_RUN:
-        with open(filepath, "w") as f:
-            f.writelines(lines)
+        atomic_write(filepath, lines)
 
     # Create NEW tasks (matured NEW_XX get their TECH line in place, which
     # is inside # Future Projects — the next organize pass promotes them)
@@ -2209,8 +2254,7 @@ def main(target_sprint_num=None):
 
     # Re-parse after creation (line numbers may have shifted)
     if not DRY_RUN:
-        with open(filepath, "w") as f:
-            f.writelines(lines)
+        atomic_write(filepath, lines)
     local_tasks, lines = parse_sprint_file(filepath)
 
     # Pull new tasks
@@ -2227,8 +2271,7 @@ def main(target_sprint_num=None):
     if DRY_RUN:
         print("  [dry-run] Would write changes to sprint file.")
     else:
-        with open(filepath, "w") as f:
-            f.writelines(lines)
+        atomic_write(filepath, lines)
 
     # Re-parse after subtask creation
     local_tasks, lines = parse_sprint_file(filepath)
@@ -2260,8 +2303,7 @@ def main(target_sprint_num=None):
                     print(f"  Removed TECH-{tech_num} from sprint file ({tag}).")
                     continue
             kept.append(line)
-        with open(filepath, "w") as f:
-            f.writelines(kept)
+        atomic_write(filepath, kept)
 
     # [NN]-marked lines were attached to that sprint's list. Keep the
     # [NN] marker (organize_future_projects sorts by it). If the line
@@ -2309,8 +2351,7 @@ def main(target_sprint_num=None):
             relocated = len(blocks)
 
         if relocated:
-            with open(filepath, "w") as f:
-                f.writelines(current_lines)
+            atomic_write(filepath, current_lines)
             print(f"  Moved {relocated} [NN]-marked task(s) to # Future Projects.")
 
     # Failed-to-move: [NN] applied to a task whose ClickUp home IS the
@@ -2338,8 +2379,7 @@ def main(target_sprint_num=None):
                 for bline in block:
                     current_lines.insert(fm_insert, bline)
                     fm_insert += 1
-            with open(filepath, "w") as f:
-                f.writelines(current_lines)
+            atomic_write(filepath, current_lines)
             print(f"  Moved {len(blocks)} task(s) to # Failed to Move (home list is current sprint).")
 
     # File alpha-topic-marker lines into matching section inside sprint file
@@ -2394,8 +2434,7 @@ def main(target_sprint_num=None):
                     current_lines, _ = insert_into_remembered_section(current_lines, heading, block)
                 print(f"  Filed {len(blocks)} task(s) under {heading.strip()}")
 
-            with open(filepath, "w") as f:
-                f.writelines(current_lines)
+            atomic_write(filepath, current_lines)
         elif resolved and DRY_RUN:
             for tech_num, heading in resolved.items():
                 print(f"  [dry-run] TECH-{tech_num}: file under {heading.strip()}")
@@ -2502,8 +2541,7 @@ def main(target_sprint_num=None):
                 for bline in block:
                     current_lines.insert(d_insert, bline)
                     d_insert += 1
-            with open(filepath, "w") as f:
-                f.writelines(current_lines)
+            atomic_write(filepath, current_lines)
             print(f"  Moved {len(blocks)} drifted task(s) to # Drifted section.")
         print()
 
@@ -2550,8 +2588,7 @@ def main(target_sprint_num=None):
                 for bline in block:
                     current_lines.insert(insert_idx, bline)
                     insert_idx += 1
-            with open(filepath, "w") as f:
-                f.writelines(current_lines)
+            atomic_write(filepath, current_lines)
             moved = len(blocks)
         elif to_promote:
             for i in to_promote:
@@ -2568,8 +2605,7 @@ def main(target_sprint_num=None):
         current_lines = f.readlines()
     current_lines = sort_sections(current_lines)
     if not DRY_RUN:
-        with open(filepath, "w") as f:
-            f.writelines(current_lines)
+        atomic_write(filepath, current_lines)
     print()
 
     # Move done items to # Done section
@@ -2578,8 +2614,7 @@ def main(target_sprint_num=None):
         current_lines = f.readlines()
     current_lines = move_done_to_done_section(current_lines)
     if not DRY_RUN:
-        with open(filepath, "w") as f:
-            f.writelines(current_lines)
+        atomic_write(filepath, current_lines)
     print()
 
     # Prompt to close any agent sessions tied to done tasks
