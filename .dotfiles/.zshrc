@@ -6,10 +6,11 @@
 # ===========================================
 # PATH and Environment
 # ===========================================
+# typeset -U in .zshenv handles dedup; just prepend.
+# (.opencode/bin already added by .zshenv)
 export PATH="$HOME/.local/bin:$PATH"
 export PATH="/opt/homebrew/opt/libpq/bin:$PATH"
 export PATH="$PATH:$(go env GOPATH)/bin"
-export PATH="$HOME/.opencode/bin:$PATH"
 
 # Loads Environment variables
 [ -f ~/.env ] && source ~/.env
