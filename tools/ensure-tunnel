@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Ensure an SSH tunnel is open for a given db, reopen via evaql if not.
+# Usage: ensure-tunnel <db>
+#   db: bim, finn, bim_stag, finn_stag
+# Exit 0 if tunnel is up, 1 on failure.
+
+set -euo pipefail
+
+db="${1:-}"
+if [[ -z "$db" ]]; then
+    echo "Usage: ensure-tunnel <db>" >&2
+    echo "  db: bim, finn, bim_stag, finn_stag" >&2
+    exit 1
+fi
+
+case "$db" in
+    bim|bim_prod)       port=24601; domain=bim;      env=production ;;
+    finn|finn_prod)     port=24603; domain=finnegan;  env=production ;;
+    bim_stag)           port=24602; domain=bim;      env=staging ;;
+    finn_stag)          port=24604; domain=finnegan;  env=staging ;;
+    *) echo "Unknown db: $db" >&2; exit 1 ;;
+esac
+
+# Already listening? Done.
+if lsof -iTCP:$port -sTCP:LISTEN -t &>/dev/null; then
+    exit 0
+fi
+
+echo "Opening SSH tunnel for $db..."
+
+# Auto-accept unknown SSH host keys for the target server
+if command -v vault &>/dev/null; then
+    tunnel_ip=$(curl -ss "https://eva.vidangel.us/product/$domain/$env" \
+        -H "X-Vault-Token: $(vault print token)" --fail 2>/dev/null | awk '{print $1}')
+    if [[ -n "$tunnel_ip" ]] && ! ssh-keygen -F "$tunnel_ip" &>/dev/null; then
+        echo "Adding host key for $tunnel_ip..."
+        ssh-keyscan -t ed25519,rsa "$tunnel_ip" 2>/dev/null >> ~/.ssh/known_hosts
+    fi
+fi
+
+session=tunnels
+cmd="evaql $domain $env; echo 'Tunnel closed. Press enter to exit.'; read"
+
+# Build -e flags so the new pane inherits this shell's auth env even if
+# the existing tmux session was created without it.
+env_flags=()
+for key in VAULT_ADDR VAULT_NAMESPACE VAULT_TOKEN VAULT_USER VAULT_PASS; do
+    val="${!key:-}"
+    [[ -n "$val" ]] && env_flags+=("-e" "$key=$val")
+done
+
+# Add a new pane for this tunnel; never touch existing panes (they may
+# be running other tunnels). Killing panes by foreground-command name
+# was racy — caused live tunnels to be torn down.
+if command tmux has-session -t "$session" 2>/dev/null; then
+    command tmux split-window -t "$session" -h "${env_flags[@]}" "$cmd"
+else
+    command tmux new-session -d -s "$session" -n tunnels "${env_flags[@]}" "$cmd"
+fi
+
+# Quick poll: tunnel often opens in <2s if no auth needed.
+for _ in 1 2 3 4 5; do
+    sleep 1
+    if lsof -iTCP:$port -sTCP:LISTEN -t &>/dev/null; then
+        echo "Tunnel open for $db on port $port"
+        exit 0
+    fi
+done
+
+# Still down → likely waiting on interactive auth (vault token / SSH).
+# If we're inside tmux, surface the detached session in a popup so the
+# user can authenticate. Detaching the popup leaves the tunnel running.
+if [[ -n "${TMUX:-}" ]]; then
+    echo "Tunnel needs auth — opening attach popup. Detach (prefix-d) when done."
+    command tmux display-popup -E -w 90% -h 80% \
+        "tmux attach -t $session" || true
+
+    # Poll once more after popup closes
+    for _ in 1 2 3 4 5; do
+        sleep 1
+        if lsof -iTCP:$port -sTCP:LISTEN -t &>/dev/null; then
+            echo "Tunnel open for $db on port $port"
+            exit 0
+        fi
+    done
+fi
+
+echo "ERROR: Tunnel for $db not open. Run 'evaql $domain $env' manually," >&2
+echo "       or 'tmux attach -t $session' to finish authentication." >&2
+exit 1
