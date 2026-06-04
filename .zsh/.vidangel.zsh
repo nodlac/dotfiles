@@ -421,6 +421,7 @@ source ~/repos/agent-tools/agent-tools.sh
 ##########################################################
 # Work exports
 ##########################################################
+export JAVA_HOME=$(/usr/libexec/java_home -v 17)
 export ANDROID_HOME=$HOME/Library/Android/sdk
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
@@ -433,6 +434,7 @@ export FINNEGAN_CONN="host='127.0.0.1' port=24603 dbname='vidangel' user='$FINNE
 ##########################################################
 export PATH=$PATH:$ANDROID_HOME/platform-tools
 export PATH="/opt/homebrew/opt/ruby/bin:$PATH"
+export PATH="$PATH:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools"
 
 ##########################################################
 # Work Alias

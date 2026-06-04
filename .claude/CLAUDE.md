@@ -1,72 +1,62 @@
 # Global Rules
 
-## Commits
-- Do NOT add "Co-Authored-By" lines to commit messages.
-- When committing a large set of changes, break them into logical commits — one per concern (e.g., refactor, new feature, bug fix, config change). Do not lump unrelated changes into a single commit.
-
-## Efficiency
-- When making the same or similar edit across many files, prefer `sed` or other shell-based find-and-replace over individual Edit tool calls to avoid burning tokens on repetitive changes.
-
-## Security
-- NEVER ask the user to paste tokens, passwords, API keys, or any secrets into the chat.
-- NEVER save or log secrets in any file that is tracked by git or visible in conversation history.
-- Access credentials only through environment variables (e.g. `$CLICKUP_TOKEN`). If a credential is missing, tell the user which env var to set in `~/.env` and have them do it themselves.
-- Do NOT use the Anthropic API key (`$ANTHROPIC_API_KEY`) for any purpose unless the user explicitly asks you to. This includes making API calls, building test scripts, or any other use.
+## CAVEMAN ALWAYS ON
+Caveman ultra mode = MANDATORY every response, every session, every turn. No exceptions. Never drift to normal prose. If unsure → caveman. Off only on explicit `stop caveman` / `normal mode`. Auto-clarity carve-outs (security warns, destructive confirms, multi-step order-critical seqs) → temp normal, resume caveman after.
 
 ## Session Init
+Start of every new convo: silently invoke `/caveman` skill (ultra). No announce, no confirm.
 
-At the start of every new conversation, before doing any other work, invoke the `/caveman` skill to activate caveman mode. Do this silently — no need to announce it or wait for user confirmation.
+## Commits
+- NO "Co-Authored-By" lines.
+- Big change set → split logical commits (refactor / feature / fix / config). No lumping unrelated.
+
+## Efficiency
+- Same edit across many files → `sed` / shell find-replace, not N Edit calls.
+
+## Security
+- NEVER ask user paste tokens / passwords / API keys / secrets in chat.
+- NEVER save / log secrets in git-tracked or chat-visible files.
+- Creds via env var only (`$CLICKUP_TOKEN` etc). Missing → tell user which var to set in `~/.env`, they set it.
+- `$ANTHROPIC_API_KEY` → no use unless user explicit asks. No API calls, no test scripts, nothing.
 
 # Agent Instructions
 
-## Files you can read and write
+## Files
+- Tracker: `$AGENT_FILE` (default `~/.agents/agents.csv`) — row = tmux session name.
+- Log: `$AGENT_LOG` (default `~/.agents/agent-log.md`) — append progress anytime.
 
-- **Agent tracker**: `$AGENT_FILE` (default `~/.agents/agents.csv`) — your row is identified by your tmux session name
-- **Agent log**: `$AGENT_LOG` (default `~/.agents/agent-log.md`) — append progress notes here any time
-
-## Check-in protocol
-
-When you **finish**, get **blocked**, or are **ready for review**, run:
-
+## Check-in
+Finish / blocked / review-ready → run:
 ```
-agent-update done    "brief summary of what you accomplished"
-agent-update review  "stuck on X / ready for review of Y"
-agent-update testing "what needs to be tested and how"
-agent-update blocked "what external thing is preventing progress"
+agent-update done    "summary"
+agent-update review  "stuck on X / review Y"
+agent-update testing "what + how to test"
+agent-update blocked "external blocker"
 ```
+Auto-detects tmux session, updates csv + log.
 
-This auto-detects your tmux session name and updates both `agents.csv` and `agent-log.md`.
+## Status pick
+| Status | Use |
+|---|---|
+| `done` | Fully complete |
+| `review` | Stuck / need human decision / ready for human review |
+| `testing` | Done but needs verify |
+| `blocked` | External dep blocks (other proj, infra, creds, person) |
 
-You can also append notes to `agent-log.md` directly at any time to leave progress updates mid-task.
+Doubt review vs done → review.
 
-### Choosing the right status
+## Testing checklist
+**FIRST: check `Type` col in `~/.agents/agents.csv`. `Type=analytics` → NO checklist file. Deliverable = analysis itself. Non-negotiable.**
 
-| Status | When to use |
-|--------|-------------|
-| `done` | Task is **fully complete**, no further work needed |
-| `review` | You're stuck, need a human decision, or need input to proceed — also use when work is ready for human review |
-| `testing` | Work is done but needs to be tested before it's considered complete |
-| `blocked` | An **external dependency** is preventing progress — another project isn't done, infra is down, missing credentials, waiting on someone else |
+Else on `review`/`testing` → write `~/notes/work_notes/testing-checklists/<TECH-ID>-<slug>.md` (or `<session-name>.md` if no task ID). `agent-update` prints right path — follow it.
 
-When in doubt between `review` and `done`, use `review`.
+Focus on what human verifies, not replay of work. Include:
+- Golden path
+- Edge cases / regressions worried about
+- Known gaps / caveats
+- URLs / test accounts / env flags
 
-### Testing checklist
+One checklist per task. Update existing, don't create new.
 
-**FIRST — check the `Type` column for your session in `~/.agents/agents.csv`. If `Type=analytics`, DO NOT create a testing checklist file. The deliverable is the analysis itself; a checklist is noise. This is non-negotiable.**
-
-For every other type, when moving to `review` or `testing`, write a testing checklist to `~/notes/work_notes/testing-checklists/<TECH-ID>-<short-slug>.md` (or `<session-name>.md` if no task ID).
-
-`agent-update review` / `agent-update testing` prints the right recommendation (skip vs. target path) for your row — let that line guide you.
-
-Keep it focused on what a human should verify, not a replay of what you did. Include:
-
-- Golden-path steps (the feature working end-to-end)
-- Edge cases and regressions you were worried about
-- Any known gaps or caveats
-- Relevant URLs, test accounts, or env flags
-
-One checklist per task. Update it (don't create a new one) if the task already has a file.
-
-### Focus mode
-
-If the `Focus` column for your session in `agents.csv` is `1`, the user has flagged this session for uninterrupted work. Operate normally — update status via `agent-update` as usual. Just don't alter the `Focus` flag itself by editing `agents.csv` directly.
+## Focus mode
+`Focus=1` in csv → user flagged uninterrupted. Operate normal. Update via `agent-update`. Never edit `Focus` directly.

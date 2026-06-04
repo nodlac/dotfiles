@@ -49,13 +49,62 @@ for key in VAULT_ADDR VAULT_NAMESPACE VAULT_TOKEN VAULT_USER VAULT_PASS; do
     [[ -n "$val" ]] && env_flags+=("-e" "$key=$val")
 done
 
-# Add a new pane for this tunnel; never touch existing panes (they may
-# be running other tunnels). Killing panes by foreground-command name
-# was racy — caused live tunnels to be torn down.
-if command tmux has-session -t "$session" 2>/dev/null; then
-    command tmux split-window -t "$session" -h "${env_flags[@]}" "$cmd"
-else
-    command tmux new-session -d -s "$session" -n tunnels "${env_flags[@]}" "$cmd"
+prune_dead_panes() {
+    command tmux has-session -t "$session" 2>/dev/null || return 0
+    # Pids currently holding any tunnel port (global lookup — survives
+    # re-parented ssh procs that aren't direct children of the pane shell).
+    local tunnel_pids
+    tunnel_pids=$( {
+        lsof -nP -iTCP:24601 -sTCP:LISTEN -t 2>/dev/null || true
+        lsof -nP -iTCP:24602 -sTCP:LISTEN -t 2>/dev/null || true
+        lsof -nP -iTCP:24603 -sTCP:LISTEN -t 2>/dev/null || true
+        lsof -nP -iTCP:24604 -sTCP:LISTEN -t 2>/dev/null || true
+    } | sort -u)
+    while IFS=' ' read -r pane_id pane_pid; do
+        # Recursively collect all descendant pids under the pane.
+        local descendants="$pane_pid"
+        local frontier="$pane_pid"
+        while [[ -n "$frontier" ]]; do
+            local next=""
+            for fp in $frontier; do
+                local kids
+                kids=$(pgrep -P "$fp" 2>/dev/null || true)
+                [[ -n "$kids" ]] && next+=" $kids"
+            done
+            frontier="$next"
+            [[ -n "$next" ]] && descendants+=" $next"
+        done
+        local keep=0
+        for pid in $descendants; do
+            for tpid in $tunnel_pids; do
+                if [[ "$pid" == "$tpid" ]]; then
+                    keep=1; break 2
+                fi
+            done
+        done
+        if [[ $keep -eq 0 ]]; then
+            command tmux kill-pane -t "$pane_id" 2>/dev/null || true
+        fi
+    done < <(command tmux list-panes -t "$session" -F '#{pane_id} #{pane_pid}' 2>/dev/null)
+}
+
+# Prune dead panes first so the session doesn't fill up.
+prune_dead_panes
+
+# Try to add the pane. If split-window fails (no space, dimension limits),
+# fall back: nuke the session and start fresh.
+spawn_pane() {
+    if command tmux has-session -t "$session" 2>/dev/null; then
+        command tmux split-window -t "$session" -h "${env_flags[@]}" "$cmd" 2>&1
+    else
+        command tmux new-session -d -s "$session" -n tunnels "${env_flags[@]}" "$cmd" 2>&1
+    fi
+}
+
+if ! out=$(spawn_pane); then
+    echo "tmux refused: $out — nuking $session and retrying"
+    command tmux kill-session -t "$session" 2>/dev/null || true
+    spawn_pane
 fi
 
 # Quick poll: tunnel often opens in <2s if no auth needed.

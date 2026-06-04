@@ -445,7 +445,9 @@ require('lazy').setup({
       local builtin = require 'telescope.builtin'
       vim.keymap.set('n', '<leader>sh', builtin.help_tags, { desc = '[S]earch [H]elp' })
       vim.keymap.set('n', '<leader>sk', builtin.keymaps, { desc = '[S]earch [K]eymaps' })
-      vim.keymap.set('n', '<leader>sf', function() builtin.find_files { hidden = true } end, { desc = '[S]earch [F]iles' })
+      vim.keymap.set('n', '<leader>sf', function()
+        builtin.find_files { hidden = true }
+      end, { desc = '[S]earch [F]iles' })
       vim.keymap.set('n', '<leader>ss', builtin.builtin, { desc = '[S]earch [S]elect Telescope' })
       vim.keymap.set('n', '<leader>sw', builtin.grep_string, { desc = '[S]earch current [W]ord' })
       vim.keymap.set('n', '<leader>sg', builtin.live_grep, { desc = '[S]earch by [G]rep' })
@@ -783,7 +785,7 @@ require('lazy').setup({
         root_markers = { 'Package.swift', '.git' },
         capabilities = capabilities,
       })
-      vim.lsp.enable('sourcekit')
+      vim.lsp.enable 'sourcekit'
     end,
   },
 
@@ -801,9 +803,10 @@ require('lazy').setup({
         desc = '[F]ormat buffer',
       },
     },
-    opts = {
+    opts = function()
+      return {
       notify_on_error = false,
-      format_on_save = true,
+      format_on_save = false,
       -- function(bufnr)
       --   -- Disable "format_on_save lsp_fallback" for languages that don't
       --   -- have a well standardized coding style. You can add additional
@@ -823,19 +826,39 @@ require('lazy').setup({
         css = { 'prettier' },
         less = { 'eslint_d', 'prettier' },
         html = { 'prettier' },
-        python = { 'ruff', 'yapf' },
+        python = { 'ruff_imports_uv', 'ruff_uv' },
         go = { 'gopls' },
         javascript = { 'eslint_d', 'prettier', stop_after_first = true },
         jsx = { 'eslint_d', 'prettier', stop_after_first = true },
         vue = { 'eslint_d', 'prettier', stop_after_first = true },
         arduino = { 'clang-format' },
-        -- Conform can also run multiple formatters sequentially
-        -- python = { "isort", "black" },
-        --
-        -- You can use 'stop_after_first' to run the first available formatter from the list
-        -- javascript = { "prettierd", "prettier", stop_after_first = true },
       },
-    },
+      formatters = {
+        -- Match shell `uv run ruff format` so the project-pinned ruff
+        -- + pyproject.toml drive both pathways identically.
+        ruff_uv = {
+          command = 'uv',
+          args = { 'run', 'ruff', 'format', '--stdin-filename', '$FILENAME', '-' },
+          stdin = true,
+          cwd = require('conform.util').root_file({ 'pyproject.toml', 'uv.lock' }),
+          require_cwd = true,
+        },
+        -- Sort imports via ruff's I rules. Runs before ruff_uv so the
+        -- final pass also formats whatever new ordering produced.
+        ruff_imports_uv = {
+          command = 'uv',
+          args = {
+            'run', 'ruff', 'check',
+            '--select', 'I', '--fix', '--exit-zero',
+            '--stdin-filename', '$FILENAME', '-',
+          },
+          stdin = true,
+          cwd = require('conform.util').root_file({ 'pyproject.toml', 'uv.lock' }),
+          require_cwd = true,
+        },
+      },
+      }
+    end,
   },
 
   { -- Autocompletion
@@ -1014,7 +1037,7 @@ require('lazy').setup({
     'nvim-treesitter/nvim-treesitter',
     build = ':TSUpdate',
     main = 'nvim-treesitter',
-      -- [[ Configure Treesitter ]] See `:help nvim-treesitter`
+    -- [[ Configure Treesitter ]] See `:help nvim-treesitter`
     opts = {
       ensure_installed = {
         'bash',
@@ -1113,6 +1136,6 @@ vim.opt.runtimepath:append(vim.fn.stdpath 'data' .. '/site')
 -- Rebuild treesitter parsers for current platform
 -- Run :TSRebuild after switching OS (e.g., Linux -> Mac)
 vim.api.nvim_create_user_command('TSRebuild', function()
-  vim.cmd('TSUpdateSync')
+  vim.cmd 'TSUpdateSync'
   vim.notify('Treesitter parsers rebuilt for ' .. vim.fn.system('uname'):gsub('%s+', ''), vim.log.levels.INFO)
 end, {})

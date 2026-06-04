@@ -55,8 +55,10 @@ vim.keymap.set('n', 'Q', '<nop>') -- prime says it's the worst place in the univ
 
 vim.keymap.set('n', '<C-f>', '<cmd>silent !tmux neww tmux-sessionizer<CR>')
 
-vim.keymap.set('n', '<leader>x', [[:%s/\<<C-r><C-w>\>/<C-r><C-w>/gI<Left><Left><Left>]])
+-- Global find and replace
+im.keymap.set('n', '<leader>x', [[:%s/\<<C-r><C-w>\>/<C-r><C-w>/gI<Left><Left><Left>]])
 
+-- opens file explorer
 vim.keymap.set("n", "<leader>pv", "<cmd>Explor<CR>", {
   noremap = true,
   silent = true,
@@ -65,10 +67,6 @@ vim.keymap.set("n", "<leader>pv", "<cmd>Explor<CR>", {
 
 -- remap s
 vim.keymap.set('n', 's', 'xi')
-
-
--- remap rename
-vim.keymap.set('n', '<leader>rn', 'grn')
 
 -- sprint-sync: save notes, sync with ClickUp, pull changes (floating log)
 vim.keymap.set('n', '<leader>ss', '<cmd>SprintSync<CR>', {

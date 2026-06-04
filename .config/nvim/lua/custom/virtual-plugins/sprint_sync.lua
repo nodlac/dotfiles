@@ -149,9 +149,14 @@ vim.api.nvim_create_user_command('SprintSync', function(opts)
   })
 end, {
   nargs = '*',
-  complete = function() return { 'sync', 'rollover', 'new', '--dry-run' } end,
+  complete = function() return { 'sync', 'rollover', 'new', 'pull', '--dry-run' } end,
   desc = 'Run sprint-sync on current sprint file (floating log)',
 })
+
+-- :SprintPull = read-only sync (pulls from ClickUp, no writes back)
+vim.api.nvim_create_user_command('SprintPull', function()
+  vim.cmd('SprintSync pull')
+end, { desc = 'Pull-only sprint-sync (no writes to ClickUp)' })
 
 vim.api.nvim_create_user_command('SprintSyncLog', function()
   if last_buf and vim.api.nvim_buf_is_valid(last_buf) then
