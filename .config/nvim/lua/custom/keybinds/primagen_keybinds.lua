@@ -56,7 +56,7 @@ vim.keymap.set('n', 'Q', '<nop>') -- prime says it's the worst place in the univ
 vim.keymap.set('n', '<C-f>', '<cmd>silent !tmux neww tmux-sessionizer<CR>')
 
 -- Global find and replace
-im.keymap.set('n', '<leader>x', [[:%s/\<<C-r><C-w>\>/<C-r><C-w>/gI<Left><Left><Left>]])
+vim.keymap.set('n', '<leader>x', [[:%s/\<<C-r><C-w>\>/<C-r><C-w>/gI<Left><Left><Left>]])
 
 -- opens file explorer
 vim.keymap.set("n", "<leader>pv", "<cmd>Explor<CR>", {
