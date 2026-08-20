@@ -22,4 +22,13 @@ return {
       },
     },
   },
+  config = function(_, opts)
+    require('neo-tree').setup(opts)
+    vim.api.nvim_create_autocmd('FileType', {
+      pattern = 'neo-tree',
+      callback = function()
+        vim.wo.number = true
+      end,
+    })
+  end,
 }

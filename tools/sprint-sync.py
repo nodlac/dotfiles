@@ -17,6 +17,7 @@ import tempfile
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
+import threading
 from datetime import date
 
 
@@ -112,9 +113,40 @@ USER_ID = os.environ.get("CLICKUP_USER_ID")
 TEAM_ID = os.environ.get("CLICKUP_TEAM_ID", "14252037")
 SPRINT_FOLDER_ID = "90115890584"
 SPRINT_DIR = os.path.expanduser("~/notes/work_notes/sprints")
+SPRINT_FILE = os.path.join(SPRINT_DIR, "sprint_tracker.md")
 CLICKUP_BASE = f"https://app.clickup.com/t/{TEAM_ID}"
 DRY_RUN = "--dry-run" in sys.argv
 PULL_ONLY = "--pull-only" in sys.argv or (len(sys.argv) > 1 and sys.argv[1] == "pull")
+VERBOSE = "--verbose" in sys.argv or "-v" in sys.argv
+
+# ── User-facing logger ────────────────────────────────────────────────────
+# Distinct from the file-only `log()` above. Routes to stdout via stdlib
+# logging. Default level = WARNING (errors + warnings + summary only).
+# --verbose / -v drops to INFO so per-task updates show.
+import logging as _logging
+
+_LOG_FORMAT = "%(asctime)s %(levelname)-7s %(tag)s: %(message)s"
+_logger = _logging.getLogger("sprintsync")
+_logger.setLevel(_logging.INFO if VERBOSE else _logging.WARNING)
+_logger.propagate = False
+if not _logger.handlers:
+    _h = _logging.StreamHandler(sys.stdout)
+    _h.setFormatter(_logging.Formatter(_LOG_FORMAT, datefmt="%H:%M:%S"))
+    _logger.addHandler(_h)
+
+
+class _Out:
+    """Tag-aware user-facing logger. Tags name the call site, e.g.
+    'plan.status', 'execute.update', 'arrange.move'."""
+    def info(self, tag, msg):    _logger.info(msg,    extra={"tag": tag})
+    def warning(self, tag, msg): _logger.warning(msg, extra={"tag": tag})
+    def error(self, tag, msg):   _logger.error(msg,   extra={"tag": tag})
+    def summary(self, msg):
+        # 1-liner, always visible regardless of level
+        print(msg)
+
+
+out = _Out()
 
 # Marker <-> ClickUp status mapping
 MARKER_TO_STATUS = {
@@ -142,6 +174,7 @@ CURRENT_SPRINT_STATUS_ORDER = {
     "[/]": 2,
     "[ ]": 3,
     "[~]": 4,
+    "[h]": 5,
 }
 
 # Patterns
@@ -176,13 +209,14 @@ NEW_TYPE_NAME = {
 # NEW_BUG / NEW_B / NEW_CHORE / NEW_C / NEW_FEATURE / NEW_F / NEW_ANALYTICS / NEW_A
 # Raw "NEW " without a type is rejected (must pick a type list)
 # Long aliases listed before short ones so ANALYTICS matches before A.
+# Marker is optional: `- NEW_BUG x` == `- [ ] NEW_BUG x` (group 2 -> None).
 NEW_TASK_PATTERN = re.compile(
-    r"^(\s*-\s*)\[([^\]]+)\]\s+NEW_(ANALYTICS|BUG|CHORE|FEATURE|A|B|C|F)\b\s+(.*)",
+    r"^(\s*-\s*)(?:\[([^\]]+)\]\s+)?NEW_(ANALYTICS|BUG|CHORE|FEATURE|A|B|C|F)\b\s+(.*)",
     re.IGNORECASE,
 )
 # Bare NEW (no type) — reported as error so user fixes the line
 BARE_NEW_PATTERN = re.compile(
-    r"^(\s*-\s*)\[([^\]]+)\]\s+NEW(?:_\d+)?\b\s+(.*)"
+    r"^(\s*-\s*)(?:\[([^\]]+)\]\s+)?NEW(?:_\d+)?\b\s+(.*)"
 )
 # For tasks created but awaiting custom_id assignment
 PENDING_TASK_PATTERN = re.compile(
@@ -194,45 +228,56 @@ CHILD_TASK_PATTERN = re.compile(
 )
 
 
+import time as _time
+
+
 def api(method, path, body=None):
-    """Make a ClickUp API request."""
+    """Make a ClickUp API request.
+    Logs start + completion + duration at INFO. When --verbose, the user
+    sees a live stream of API activity; if the sync hangs, the last
+    'api.req start' line names the call that's stuck."""
     url = f"https://api.clickup.com/api/v2{path}"
     data = json.dumps(body).encode() if body else None
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Authorization", TOKEN)
     req.add_header("Content-Type", "application/json")
     log(f"api: {method} {path}")
+    out.info("api.req", f"start {method} {path}")
+    t0 = _time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             body = resp.read()
-            log(f"api: {method} {path} -> {resp.status}")
+            dur_ms = int((_time.monotonic() - t0) * 1000)
+            log(f"api: {method} {path} -> {resp.status} ({dur_ms}ms)")
+            out.info("api.req", f"done  {method} {path} -> {resp.status} ({dur_ms}ms, {len(body)} bytes)")
             return json.loads(body) if body.strip() else {}
     except urllib.error.HTTPError as e:
-        log(f"api: {method} {path} -> HTTP {e.code}")
-        print(f"  API error {e.code}: {e.read().decode()}")
+        dur_ms = int((_time.monotonic() - t0) * 1000)
+        log(f"api: {method} {path} -> HTTP {e.code} ({dur_ms}ms)")
+        out.error("api.http", f"{e.code} on {method} {path} ({dur_ms}ms): {e.read().decode()}")
         return None
     except Exception as e:
-        log(f"api: {method} {path} -> EXC {type(e).__name__}: {e}")
-        print(f"  API exception: {type(e).__name__}: {e}")
+        dur_ms = int((_time.monotonic() - t0) * 1000)
+        log(f"api: {method} {path} -> EXC {type(e).__name__}: {e} ({dur_ms}ms)")
+        out.error("api.exc", f"{method} {path} ({dur_ms}ms): {type(e).__name__}: {e}")
         return None
 
 
 def find_current_sprint_file():
-    """Find the sprint file with the highest number."""
-    files = glob.glob(os.path.join(SPRINT_DIR, "sprint_*.md"))
-    if not files:
-        print("No sprint files found.")
+    """The single sprint tracker file."""
+    if not os.path.exists(SPRINT_FILE):
+        print(f"Sprint tracker not found: {SPRINT_FILE}")
         sys.exit(1)
-
-    def sprint_num(f):
-        m = re.search(r"sprint_(\d+)", f)
-        return int(m.group(1)) if m else 0
-
-    return max(files, key=sprint_num)
+    return SPRINT_FILE
 
 
 def get_sprint_number(filepath):
-    """Extract sprint number from filename."""
+    """Current sprint number from the `sprint:` frontmatter label.
+    Falls back to a sprint_NN filename for legacy files."""
+    fm = read_frontmatter(filepath)
+    v = fm.get("sprint")
+    if v and str(v).isdigit():
+        return int(v)
     m = re.search(r"sprint_(\d+)", filepath)
     return int(m.group(1)) if m else None
 
@@ -291,14 +336,30 @@ def find_clickup_sprint_list(sprint_num):
 
 
 def get_sprint_file(sprint_num=None):
-    """Get sprint file path. If sprint_num given, use that; otherwise highest."""
-    if sprint_num:
-        path = os.path.join(SPRINT_DIR, f"sprint_{sprint_num}.md")
-        if os.path.exists(path):
-            return path
-        print(f"Sprint file not found: sprint_{sprint_num}.md")
-        sys.exit(1)
+    """The single tracker file. sprint_num is ignored — the tracker's
+    `sprint:` label defines the active sprint."""
     return find_current_sprint_file()
+
+
+def set_frontmatter_field(fm_lines, key, value):
+    """Set `key: value` inside frontmatter lines (fenced by ---).
+    Updates the line in place if present, else inserts before the
+    closing fence. Returns new list."""
+    out = []
+    replaced = False
+    key_re = re.compile(rf"\s*{re.escape(key)}\s*:")
+    for line in fm_lines:
+        if key_re.match(line) and not replaced:
+            out.append(f"{key}: {value}\n")
+            replaced = True
+        else:
+            out.append(line)
+    if not replaced:
+        for i in range(len(out) - 1, -1, -1):
+            if out[i].strip() == "---":
+                out.insert(i, f"{key}: {value}\n")
+                break
+    return out
 
 
 _list_status_cache = {}
@@ -336,11 +397,30 @@ def resolve_status(target, available):
 
 
 _remote_task_cache = {}
+_remote_cache_primed = False
+
+
+def _prime_remote_cache():
+    """Seed the per-task cache from the already-fetched team task list. Without
+    this the push/drift paths re-GET every TECH task individually (~80 calls,
+    5-11s each — the dominant cost of a sync). Tasks not assigned to the user
+    won't appear here and still fall back to an individual fetch."""
+    global _remote_cache_primed
+    if _remote_cache_primed:
+        return
+    _remote_cache_primed = True
+    for t in _get_team_tasks():
+        cid = (t.get("custom_id") or "").replace("TECH-", "")
+        if cid and cid not in _remote_task_cache:
+            _remote_task_cache[cid] = t
 
 
 def get_task_by_tech_num(tech_num):
     """Look up a single task by its TECH-XXXX custom ID. Returns task dict or None.
     Results are cached per-run so repeat lookups are free."""
+    if tech_num in _remote_task_cache:
+        return _remote_task_cache[tech_num]
+    _prime_remote_cache()
     if tech_num in _remote_task_cache:
         return _remote_task_cache[tech_num]
     data = api("GET", f"/task/TECH-{tech_num}?custom_task_ids=true&team_id={TEAM_ID}")
@@ -349,10 +429,15 @@ def get_task_by_tech_num(tech_num):
     return result
 
 
+_list_tech_ids_cache = {}
+
+
 def get_list_task_tech_ids(list_id):
     """Authoritative list membership — all TECH ids returned by the list
     task query (no user filter). Used to detect drift where task.locations
     says the task is in the list but the list view disagrees."""
+    if list_id in _list_tech_ids_cache:
+        return _list_tech_ids_cache[list_id]
     page = 0
     ids = set()
     while True:
@@ -365,6 +450,7 @@ def get_list_task_tech_ids(list_id):
         if len(tasks) < 100:
             break
         page += 1
+    _list_tech_ids_cache[list_id] = ids
     return ids
 
 
@@ -381,17 +467,45 @@ def get_tasks_by_tech_nums(tech_nums, max_workers=10):
     return {tn: _remote_task_cache.get(tn) for tn in tech_nums}
 
 
-def get_clickup_tasks(list_id):
-    """Fetch tasks (and subtasks) assigned to user from a ClickUp list.
+_team_tasks_cache = None
+_team_tasks_lock = threading.Lock()
 
-    Includes tasks whose home list is the sprint AND tasks that have the
-    sprint in their 'locations' (secondary list assignments).
-    Subtasks are returned as flat items with a 'parent' field.
-    """
-    seen_ids = set()
+
+def _get_team_tasks():
+    """All tasks (incl. subtasks, open + closed) assigned to the user across the
+    team. The result is the same regardless of which list filters it, so the
+    expensive paginated scan runs once per process and is reused by every
+    sprint/epic pull (was previously re-fetched per list — ~25s each).
+    Lock-guarded so concurrent prewarmers don't double-fetch."""
+    global _team_tasks_cache
+    with _team_tasks_lock:
+        if _team_tasks_cache is not None:
+            return _team_tasks_cache
+        tasks = []
+        page = 0
+        while True:
+            data = api(
+                "GET",
+                f"/team/{TEAM_ID}/task"
+                f"?assignees[]={USER_ID}"
+                f"&include_closed=true"
+                f"&subtasks=true"
+                f"&page={page}",
+            )
+            if not data or not data.get("tasks"):
+                break
+            tasks.extend(data["tasks"])
+            if len(data["tasks"]) < 100:
+                break
+            page += 1
+        _team_tasks_cache = tasks
+        return tasks
+
+
+def _fetch_list_assignee_tasks(list_id):
+    """Tasks (incl. subtasks, open + closed) assigned to the user whose home
+    list is list_id."""
     tasks = []
-
-    # 1. Get tasks whose home list is the sprint (including subtasks)
     page = 0
     while True:
         data = api(
@@ -404,38 +518,46 @@ def get_clickup_tasks(list_id):
         )
         if not data or not data.get("tasks"):
             break
-        for t in data["tasks"]:
-            if t["id"] not in seen_ids:
-                seen_ids.add(t["id"])
-                tasks.append(t)
+        tasks.extend(data["tasks"])
         if len(data["tasks"]) < 100:
             break
         page += 1
+    return tasks
 
-    # 2. Get all tasks assigned to user, filter by sprint in locations
-    page = 0
-    while True:
-        data = api(
-            "GET",
-            f"/team/{TEAM_ID}/task"
-            f"?assignees[]={USER_ID}"
-            f"&include_closed=true"
-            f"&subtasks=true"
-            f"&page={page}",
-        )
-        if not data or not data.get("tasks"):
-            break
-        for t in data["tasks"]:
-            if t["id"] in seen_ids:
-                continue
-            locations = t.get("locations", [])
-            if any(loc.get("id") == list_id for loc in locations):
-                seen_ids.add(t["id"])
-                tasks.append(t)
-        if len(data["tasks"]) < 100:
-            break
-        page += 1
 
+def get_clickup_tasks(list_id):
+    """Fetch tasks (and subtasks) assigned to user from a ClickUp list.
+
+    Includes tasks whose home list is the sprint AND tasks that have the
+    sprint in their 'locations' (secondary list assignments).
+    Subtasks are returned as flat items with a 'parent' field.
+    """
+    out.info("fetch.tasks", f"begin list={list_id}")
+    t0 = _time.monotonic()
+
+    # The home-list pull and the team-wide scan are independent network calls;
+    # run them concurrently so this costs max(home, team), not their sum.
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_home = ex.submit(_fetch_list_assignee_tasks, list_id)
+        f_team = ex.submit(_get_team_tasks)
+        home_tasks = f_home.result()
+        team_tasks = f_team.result()
+
+    seen_ids = set()
+    tasks = []
+    for t in home_tasks:
+        if t["id"] not in seen_ids:
+            seen_ids.add(t["id"])
+            tasks.append(t)
+    # Add user's tasks from elsewhere that list this list in their locations.
+    for t in team_tasks:
+        if t["id"] in seen_ids:
+            continue
+        if any(loc.get("id") == list_id for loc in t.get("locations", [])):
+            seen_ids.add(t["id"])
+            tasks.append(t)
+
+    out.info("fetch.tasks", f"done  list={list_id} count={len(tasks)} ({int((_time.monotonic()-t0)*1000)}ms)")
     return tasks
 
 
@@ -724,10 +846,20 @@ def insert_into_remembered_section(lines, heading_text, task_line):
     return lines, insert_idx
 
 
+def _dropped_lines(before, after):
+    """Content lines present in `before` but missing from `after`. Blank-line
+    churn is expected from re-spacing, so only non-blank text counts."""
+    from collections import Counter
+    b = Counter(l.strip() for l in before if l.strip())
+    a = Counter(l.strip() for l in after if l.strip())
+    missing = b - a
+    return [text for text, n in missing.items() for _ in range(n)]
+
+
 def sort_sections(lines):
     """Sort tasks within each section.
 
-    - # Current Sprint  → status priority: ! > > > / > ' ' > ~ (CURRENT_SPRINT_STATUS_ORDER)
+    - # Current Sprint  → status priority: ! > > > / > ' ' > ~ > h (CURRENT_SPRINT_STATUS_ORDER)
     - other ## sections → TECH ID asc
     - # Future Projects, # Done              → leave alone (others handle them)
     """
@@ -779,14 +911,18 @@ def sort_sections(lines):
                 # Trim trailing blank
                 while block and block[-1].strip() == "":
                     block.pop()
-                blocks.append(("task", m, block))
+                blocks.append(["task", m, block])
                 i = j
             else:
-                # Not a task — keep as loose line (e.g. notes between tasks)
-                blocks.append(("loose", None, [line]))
+                # Not a task (notes, NEW_ lines, prose). Ride along with the
+                # task above so sorting can never strand it; preamble if none.
+                if blocks:
+                    blocks[-1][2].append(line)
+                else:
+                    preamble.append(line)
                 i += 1
 
-        if not blocks or not any(t == "task" for t, _, _ in blocks):
+        if not blocks:
             continue
 
         def sort_key(entry):
@@ -801,7 +937,7 @@ def sort_sections(lines):
             return (0, tech_id, 0)
 
         # Only sort if section has 2+ task blocks
-        task_blocks = [b for b in blocks if b[0] == "task"]
+        task_blocks = blocks
         if len(task_blocks) < 2:
             continue
         task_blocks.sort(key=sort_key)
@@ -823,7 +959,17 @@ def sort_sections(lines):
         if new_body and new_body[-1].strip() != "":
             new_body.append("\n")
 
-        lines = lines[:start + 1] + new_body + lines[end:]
+        candidate = lines[:start + 1] + new_body + lines[end:]
+        # Reordering must never be lossy. Bail loudly instead of writing a
+        # file that quietly ate someone's notes.
+        lost = _dropped_lines(lines, candidate)
+        if lost:
+            out.error("sort.lossy", f"refusing to sort {heading_line.strip()} — would drop {len(lost)} line(s):")
+            for l in lost[:10]:
+                out.error("sort.lossy", f"    {l}")
+            continue
+
+        lines = candidate
         # Recompute indices since we mutated
         heading_idxs = [i for i, l in enumerate(lines) if re.match(r"^#+\s+", l.lstrip())]
         heading_idxs.append(len(lines))
@@ -899,7 +1045,7 @@ def organize_future_projects(lines, current_sprint=None):
             mnew = NEW_TASK_PATTERN.match(line)
             if mnew:
                 # NEW_<type> with [NN] marker has digit sprint
-                marker_body = mnew.group(2)
+                marker_body = mnew.group(2) or ""
                 if marker_body.isdigit():
                     head_entries.append((i, int(marker_body)))
                 continue
@@ -1026,6 +1172,21 @@ def sync_pull(filepath, clickup_tasks, local_tasks, lines, placements=None):
                     print(f"  TECH-{tech_num}: renamed -> {cu_title}")
                 updated += 1
 
+            # --- Adopt ClickUp terminal status when local is still open ---
+            # Substring match catches custom variants ("closed (caution!)").
+            cu_lower = cu_status.lower()
+            cu_is_closed = "closed" in cu_lower
+            cu_is_done = ("done" in cu_lower) and not cu_is_closed
+            if (cu_is_closed or cu_is_done) and local["marker"] in ("[ ]", "[/]"):
+                new_marker = "[x]" if cu_is_done else "[c]"
+                if DRY_RUN:
+                    print(f"  [dry-run] TECH-{tech_num}: local {local['marker']} -> {new_marker} ({cu_status} in ClickUp)")
+                else:
+                    lines = _update_task_marker(lines, local["line"], new_marker)
+                    local["marker"] = new_marker  # keep in-memory state in sync for downstream push
+                    print(f"  TECH-{tech_num}: adopted ClickUp status {cu_status} -> {new_marker}")
+                updated += 1
+
             # --- Check nesting changes ---
             local_indent = _get_task_indent(lines, local["line"])
             cu_parent_tech = id_to_tech.get(parent_id) if parent_id else None
@@ -1060,26 +1221,45 @@ def sync_pull(filepath, clickup_tasks, local_tasks, lines, placements=None):
                             local_tasks, lines = parse_sprint_file_lines(lines)
                     renested += 1
             elif not parent_id and local_indent > 4:
-                # Was nested, now top-level in ClickUp — un-nest
-                if DRY_RUN:
-                    print(f"  [dry-run] TECH-{tech_num}: would un-nest to top level")
+                # ClickUp says no parent, but local is indented. Two cases:
+                #   (a) User just indented to express new nesting intent —
+                #       push hasn't propagated yet. Leave it; PUSH PARENTS
+                #       will pick it up on the same run.
+                #   (b) Legacy nesting under a non-TECH or removed parent —
+                #       safe to un-nest.
+                # Distinguish by checking whether a real local TECH parent
+                # sits above at lower indent.
+                local_parent_above = None
+                for other_tn, other in local_tasks.items():
+                    if other["line"] < local["line"] and other["indent"] < local_indent:
+                        if (local_parent_above is None
+                                or other["line"] > local_tasks[local_parent_above]["line"]):
+                            local_parent_above = other_tn
+                if local_parent_above:
+                    # User intent — defer to PUSH PARENTS.
+                    out.info("pull.nest_defer",
+                             f"TECH-{tech_num}: indent suggests parent TECH-{local_parent_above}, "
+                             "letting PUSH PARENTS propagate")
                 else:
-                    block, lines = _remove_task_block(lines, local["line"])
-                    # Re-indent to top level (4 spaces)
-                    old_indent = len(block[0]) - len(block[0].lstrip())
-                    indent_diff = 4 - old_indent
-                    for bi, bline in enumerate(block):
-                        if bline.strip():
-                            cur = len(bline) - len(bline.lstrip())
-                            new_indent = max(0, cur + indent_diff)
-                            block[bi] = " " * new_indent + bline.lstrip()
-                    # Insert into Uncategorized
-                    lines, insert_idx = _find_uncategorized_insert(lines)
-                    for bi, bline in enumerate(block):
-                        lines.insert(insert_idx + bi, bline)
-                    print(f"  TECH-{tech_num}: un-nested to top level")
-                    local_tasks, lines = parse_sprint_file_lines(lines)
-                renested += 1
+                    if DRY_RUN:
+                        print(f"  [dry-run] TECH-{tech_num}: would un-nest to top level")
+                    else:
+                        block, lines = _remove_task_block(lines, local["line"])
+                        # Re-indent to top level (4 spaces)
+                        old_indent = len(block[0]) - len(block[0].lstrip())
+                        indent_diff = 4 - old_indent
+                        for bi, bline in enumerate(block):
+                            if bline.strip():
+                                cur = len(bline) - len(bline.lstrip())
+                                new_indent = max(0, cur + indent_diff)
+                                block[bi] = " " * new_indent + bline.lstrip()
+                        # Insert into Uncategorized
+                        lines, insert_idx = _find_uncategorized_insert(lines)
+                        for bi, bline in enumerate(block):
+                            lines.insert(insert_idx + bi, bline)
+                        print(f"  TECH-{tech_num}: un-nested to top level")
+                        local_tasks, lines = parse_sprint_file_lines(lines)
+                    renested += 1
 
             continue
 
@@ -1140,7 +1320,11 @@ def sync_pull(filepath, clickup_tasks, local_tasks, lines, placements=None):
         (task.get("custom_id") or "").replace("TECH-", "")
         for task in clickup_tasks if task.get("custom_id")
     }
-    off_list = [tn for tn in local_tasks if tn not in cu_ids]
+    # Skip terminal-state locals — no point reconciling closed/deleted tasks
+    # against ClickUp, and ClickUp may have deleted them (404 noise).
+    _terminal = {"[x]", "[c]", "[d]"}
+    off_list = [tn for tn, info in local_tasks.items()
+                if tn not in cu_ids and info.get("marker") not in _terminal]
     off_list_updates = 0
     off_remotes = get_tasks_by_tech_nums(off_list)
     for tech_num in off_list:
@@ -1162,9 +1346,13 @@ def sync_pull(filepath, clickup_tasks, local_tasks, lines, placements=None):
 
         # Status drift — only adopt ClickUp terminal states when local
         # is still open, to avoid clobbering in-flight local changes
-        # that PUSH hasn't flushed yet.
-        if cu_status in ("done", "Closed") and local["marker"] in ("[ ]", "[/]"):
-            new_marker = "[x]" if cu_status == "done" else "[c]"
+        # that PUSH hasn't flushed yet. Substring match catches custom
+        # variants like "closed (caution!)" — exact match used to miss.
+        cu_lower = cu_status.lower()
+        cu_is_closed = "closed" in cu_lower
+        cu_is_done = ("done" in cu_lower) and not cu_is_closed
+        if (cu_is_closed or cu_is_done) and local["marker"] in ("[ ]", "[/]"):
+            new_marker = "[x]" if cu_is_done else "[c]"
             if DRY_RUN:
                 print(f"  [dry-run] TECH-{tech_num}: local {local['marker']} -> {new_marker} (closed in ClickUp)")
             else:
@@ -1227,6 +1415,10 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
 
     for tech_num, local in local_tasks.items():
         local_marker = local["marker"]
+        # [h] hold: stays in sprint, local-only — no ClickUp push, and must not
+        # fall through to the alpha-topic filing path below.
+        if local_marker == "[h]":
+            continue
         target_status = MARKER_TO_STATUS.get(local_marker)
 
         # Detect digit marker [NN] as push-to-sprint-NN, [FF] as park-future
@@ -1394,6 +1586,18 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
         if resolved.lower() == cu_status.lower():
             continue
 
+        # Guard: don't reopen a terminal-state task. If ClickUp has the task
+        # at any "closed" or "done" variant (e.g. "closed (caution!)") and
+        # the local marker would push it back to to-do/in-progress, skip
+        # and warn. The user should mark it [c]/[x] locally to match.
+        cu_terminal = ("closed" in cu_status.lower()) or ("done" in cu_status.lower())
+        local_terminal = ("closed" in resolved.lower()) or ("done" in resolved.lower())
+        if cu_terminal and not local_terminal:
+            out.warning("push.reopen_guard",
+                        f"TECH-{tech_num}: refusing to reopen '{cu_status}' -> '{resolved}'. "
+                        f"Mark line [c] locally if you want to keep ClickUp's closed state.")
+            continue
+
         if DRY_RUN:
             print(f"  [dry-run] TECH-{tech_num}: {cu_status} -> {resolved}")
             pushed += 1
@@ -1505,6 +1709,26 @@ def sync_push_parents(local_tasks, clickup_tasks):
         print(f"  Pushed {pushed} parent update(s).")
 
 
+def delete_testing_checklist(taskid):
+    """Remove a task's testing checklist(s). Matches both the current
+    TECH_####_* underscore convention and legacy TECH-####-* hyphen names."""
+    if not taskid:
+        return []
+    d = os.path.expanduser("~/notes/work_notes/testing-checklists")
+    removed, seen = [], set()
+    for pat in (f"{taskid.replace('-', '_')}*.md", f"{taskid}*.md"):
+        for p in glob.glob(os.path.join(d, pat)):
+            if p in seen:
+                continue
+            seen.add(p)
+            try:
+                os.remove(p)
+                removed.append(os.path.basename(p))
+            except OSError:
+                pass
+    return removed
+
+
 def check_agent_closeout(done_tech_ids):
     """For any done tasks, check if there are active agents and prompt to close."""
     if not done_tech_ids:
@@ -1562,6 +1786,11 @@ def check_agent_closeout(done_tech_ids):
         with open(log_file, "a") as f:
             f.write(f"- [{today}] {sess}: closed — {tech} marked done\n")
 
+        # Task done → its testing checklist is obsolete; remove it.
+        removed = delete_testing_checklist(tech)
+        if removed:
+            print(f"  Deleted testing checklist: {', '.join(removed)}")
+
         print(f"  Marked '{sess}' done.")
 
 
@@ -1569,6 +1798,7 @@ def sync_create(filepath, lines, clickup_tasks=None):
     """Create tasks in ClickUp for NEW_<type> lines. Type selects home list
     (bug/chore/feature).
       [ ] NEW_<type>  → attach to current sprint list; line stays in place
+      NEW_<type>      → same as [ ] (marker optional)
       [NN] NEW_<type> → attach to sprint NN list; line relocated to # Future Projects
     Bare NEW (no type) is flagged as an error."""
     current_sprint = get_sprint_number(filepath)
@@ -1596,7 +1826,7 @@ def sync_create(filepath, lines, clickup_tasks=None):
             continue
 
         indent = m.group(1)
-        marker_body = m.group(2)
+        marker_body = m.group(2) or " "  # markerless line == to-do
         marker = f"[{marker_body}]"
         type_key = m.group(3).upper()
         title = m.group(4).strip()
@@ -2061,86 +2291,58 @@ def remove_empty_sections(lines):
     return result
 
 
-def sprint_rollover(from_num=None, to_num=None):
-    """Roll over uncompleted work from one sprint to another.
+def sprint_rollover(to_num=None, to_list_id=None):
+    """Roll the single tracker forward to sprint `to_num`, in place.
 
-    - Copies entire sprint structure, stripping [x] tasks + sub-items
+    - Strips completed [x] tasks + sub-items and empty sections
     - Skips # Done and # Uncategorized Tasks sections
-    - Removes empty sections
+    - Updates the frontmatter `sprint:` label and `clickup_list_id:`
     - Moves uncompleted TECH tasks to the new sprint list in ClickUp
+
+    to_list_id is captured before the frontmatter is rewritten so the
+    ClickUp migration knows the source list.
     """
-    files = glob.glob(os.path.join(SPRINT_DIR, "sprint_*.md"))
+    path = find_current_sprint_file()
+    from_num = get_sprint_number(path)
+    from_list_id = get_clickup_list_id(path)
 
-    def sprint_num_from_file(f):
-        m_f = re.search(r"sprint_(\d+)", f)
-        return int(m_f.group(1)) if m_f else 0
-
-    nums = sorted(set(sprint_num_from_file(f) for f in files))
-
-    if from_num is None:
-        if len(nums) < 2:
-            print("Need at least two sprint files for rollover.")
-            sys.exit(1)
-        from_num = nums[-2]
     if to_num is None:
-        to_num = nums[-1]
+        to_num = (from_num or 0) + 1
+    if to_list_id is None:
+        to_list_id, _ = find_clickup_sprint_list(to_num)
+        if not to_list_id:
+            print(f"No ClickUp list found for Sprint {to_num}.")
+            sys.exit(1)
 
-    from_path = os.path.join(SPRINT_DIR, f"sprint_{from_num}.md")
-    to_path = os.path.join(SPRINT_DIR, f"sprint_{to_num}.md")
+    print(f"Rolling over: sprint {from_num} -> sprint {to_num} (in {os.path.basename(path)})")
 
-    if not os.path.exists(from_path):
-        print(f"Source file not found: sprint_{from_num}.md")
-        sys.exit(1)
-    if not os.path.exists(to_path):
-        print(f"Target file not found: sprint_{to_num}.md")
-        sys.exit(1)
+    with open(path, "r") as f:
+        lines = f.readlines()
 
-    print(f"Rolling over: sprint_{from_num}.md -> sprint_{to_num}.md")
+    fm, body = strip_frontmatter(lines)
 
-    # Read source file
-    with open(from_path, "r") as f:
-        from_lines = f.readlines()
-
-    # Separate frontmatter from body
-    _, body = strip_frontmatter(from_lines)
-
-    # Filter out completed tasks and skipped sections
     filtered = filter_completed(body)
-
-    # Remove empty sections
     filtered = remove_empty_sections(filtered)
 
-    # Strip leading/trailing blank lines
     while filtered and filtered[0].strip() == "":
         filtered.pop(0)
     while filtered and filtered[-1].strip() == "":
         filtered.pop()
 
-    if not any(line.strip() for line in filtered):
-        print("  No uncompleted content to roll over.")
-        return
+    fm = set_frontmatter_field(fm, "sprint", str(to_num))
+    fm = set_frontmatter_field(fm, "clickup_list_id", f'"{to_list_id}"')
 
-    # Read target file and find where to append
-    with open(to_path, "r") as f:
-        to_lines = f.readlines()
-
-    to_fm, to_body = strip_frontmatter(to_lines)
-
-    # Append rolled-over content after frontmatter and any existing content
-    # If target already has body content, append after it
-    # If target is fresh (from sprint-new), append after frontmatter
-    result = to_fm + ["\n"] + filtered + ["\n"] + ["\n", "# Done\n"]
+    result = fm + ["\n"] + filtered + ["\n"] + ["\n", "# Done\n"]
 
     if DRY_RUN:
-        print("  [dry-run] Would write rolled-over content to target.")
-        # Show summary
+        print("  [dry-run] Would rewrite tracker for the new sprint.")
         sections = [l.strip() for l in filtered if SECTION_HEADER.match(l)]
         print(f"  Sections: {', '.join(sections)}")
         task_count = sum(1 for l in filtered if TASK_MARKER.match(l))
         done_in_source = sum(1 for l in body if DONE_MARKER.match(l))
         print(f"  Tasks carried over: {task_count} (stripped {done_in_source} completed)")
     else:
-        atomic_write(to_path, result)
+        atomic_write(path, result)
         task_count = sum(1 for l in filtered if TASK_MARKER.match(l))
         done_in_source = sum(1 for l in body if DONE_MARKER.match(l))
         print(f"  Carried over {task_count} tasks (stripped {done_in_source} completed)")
@@ -2149,9 +2351,7 @@ def sprint_rollover(from_num=None, to_num=None):
             print(f"    {s}")
 
     # Move uncompleted tasks from old ClickUp sprint to new one
-    from_list_id = get_clickup_list_id(from_path)
-    to_list_id = get_clickup_list_id(to_path)
-    if from_list_id and to_list_id:
+    if from_list_id and to_list_id and from_list_id != to_list_id:
         print("\nClickUp sprint migration:")
         # Fetch all non-done tasks assigned to user from old sprint
         old_tasks = get_clickup_tasks(from_list_id)
@@ -2178,127 +2378,272 @@ def sprint_rollover(from_num=None, to_num=None):
             print("  No tasks to migrate in ClickUp.")
 
 
-def sprint_new():
-    """Create a new sprint file linked to a ClickUp sprint list.
+def sprint_new(sprint_num=None):
+    """Advance the single sprint tracker to a new ClickUp sprint.
 
-    1. Lists available sprint lists from ClickUp
-    2. Lets user pick one
-    3. Creates sprint file with clickup_list_id in frontmatter
-    4. Runs rollover from previous sprint
-    5. Runs sync to pull in ClickUp tasks
+    No new file is created — the tracker's `sprint:` label is updated and
+    its body is rolled forward in place.
+
+    1. Pushes pending status changes from the current sprint
+    2. Lists available ClickUp sprint lists, picks target (prompt or argv)
+    3. Rolls the tracker forward (strip done, reset frontmatter, reset # Done)
+    4. Migrates uncompleted ClickUp tasks to the new list
+    5. Runs sync to pull in the new sprint's tasks
     """
-    # Push any pending status changes from current sprint first
-    existing_files = glob.glob(os.path.join(SPRINT_DIR, "sprint_*.md"))
-    if existing_files:
-        def _snum(f):
-            m_f = re.search(r"sprint_(\d+)", f)
-            return int(m_f.group(1)) if m_f else 0
-        current_file = max(existing_files, key=_snum)
-        current_list_id = get_clickup_list_id(current_file)
-        if current_list_id:
-            print(f"Pushing status changes from {os.path.basename(current_file)}...")
-            current_tasks_cu = get_clickup_tasks(current_list_id)
-            current_tasks_local, _ = parse_sprint_file(current_file)
-            sync_push(current_tasks_local, current_tasks_cu)
-            print()
+    path = find_current_sprint_file()
+    current_num = get_sprint_number(path)
+
+    # Push any pending status changes from the current sprint first
+    current_list_id = get_clickup_list_id(path)
+    if current_list_id:
+        print(f"Pushing status changes from sprint {current_num}...")
+        current_tasks_cu = get_clickup_tasks(current_list_id)
+        current_tasks_local, _ = parse_sprint_file(path)
+        sync_push(current_tasks_local, current_tasks_cu)
+        print()
 
     data = api("GET", f"/folder/{SPRINT_FOLDER_ID}/list")
     if not data:
         print("Error: Could not fetch sprint lists.")
         sys.exit(1)
 
-    lists = data.get("lists", [])
-    # Sort by sprint number
     sprint_lists = []
-    for lst in lists:
+    for lst in data.get("lists", []):
         m_name = re.match(r"Sprint\s+(\d+)", lst["name"])
         if m_name:
             sprint_lists.append((int(m_name.group(1)), lst["id"], lst["name"]))
     sprint_lists.sort()
 
-    # Show available lists
-    existing_files = glob.glob(os.path.join(SPRINT_DIR, "sprint_*.md"))
-    existing_nums = set()
-    for f in existing_files:
-        m_file = re.search(r"sprint_(\d+)", f)
-        if m_file:
-            existing_nums.add(int(m_file.group(1)))
-
     print("Available ClickUp sprint lists:")
     for num, lid, name in sprint_lists:
-        linked = " (already has file)" if num in existing_nums else ""
-        print(f"  {num}: {name}{linked}")
+        marker = " (current)" if num == current_num else ""
+        print(f"  {num}: {name}{marker}")
 
     print()
-    log("sprint_new: prompting for sprint number")
-    choice = input("Sprint number to create: ").strip()
-    log(f"sprint_new: got choice={choice!r}")
-    if not choice.isdigit():
-        log("sprint_new: choice not digit, exiting")
-        print("Invalid sprint number.")
+    default_num = current_num + 1 if current_num is not None else None
+    if sprint_num is None:
+        if default_num is None:
+            out.error("sprint_new.default", "Tracker has no current sprint number — "
+                      "pass the target on argv: `sprint-sync new <num>`.")
+            sys.exit(1)
+        if not sys.stdin.isatty():
+            log(f"sprint_new: non-tty, defaulting to {default_num}")
+            sprint_num = default_num
+        else:
+            log("sprint_new: prompting for sprint number")
+            sys.stdout.write(f"Sprint number to advance to [{default_num}]: ")
+            sys.stdout.flush()
+            choice = input().strip()
+            log(f"sprint_new: got choice={choice!r}")
+            if not choice:
+                sprint_num = default_num
+                log(f"sprint_new: empty input, defaulting to {default_num}")
+            elif not choice.isdigit():
+                log("sprint_new: choice not digit, exiting")
+                print("Invalid sprint number.")
+                sys.exit(1)
+            else:
+                sprint_num = int(choice)
+    else:
+        log(f"sprint_new: sprint_num passed via argv={sprint_num}")
+
+    if sprint_num == current_num:
+        print(f"Tracker is already on sprint {sprint_num}.")
         sys.exit(1)
 
-    sprint_num = int(choice)
-    target_path = os.path.join(SPRINT_DIR, f"sprint_{sprint_num}.md")
-    log(f"sprint_new: target_path={target_path} exists={os.path.exists(target_path)}")
-
-    if os.path.exists(target_path):
-        print(f"sprint_{sprint_num}.md already exists.")
-        sys.exit(1)
-
-    # Find the ClickUp list
     list_id = None
     for num, lid, name in sprint_lists:
         if num == sprint_num:
             list_id = lid
             break
-
     if not list_id:
         print(f"No ClickUp list found for Sprint {sprint_num}.")
         sys.exit(1)
 
-    # Create the file with frontmatter
-    content = f"""---
-id: sprint_{sprint_num}
-aliases: []
-tags:
-  - sprints
-clickup_list_id: "{list_id}"
----
-<!-- Markers:  [ ] todo  [/] in progress  [>] qa  [~] blocked  [!] urgent  [x] done  [c] closed  [d] delete
-Sprint / filing:  [NN] attach to sprint NN  [FF] park for future (undecided sprint)  [topic] file under ## topic heading
-Create:  NEW_BUG | NEW_CHORE | NEW_FEATURE | NEW_ANALYTICS  (short: NEW_B | NEW_C | NEW_F | NEW_A)  creates in that type's list
-Combo:  [NN] NEW_BUG <title>  creates + attaches to sprint NN (line parked in # Future Projects)
-Pending:  PENDING:<id> awaiting custom ID
-Sections:  # Failed to Move  # Drifted  # Current Sprint  # <topic>  # Future Projects  # Done -->
+    print()
+    log(f"sprint_new: rollover {current_num} -> {sprint_num}")
+    sprint_rollover(sprint_num, list_id)
+    log("sprint_new: rollover done")
 
-# Current Sprint
-
-# Prioritized by Core Responsibilities
-
-# Done
-"""
-    log("sprint_new: before atomic_write")
-    atomic_write(target_path, content)
-    log("sprint_new: after atomic_write")
-
-    print(f"Created sprint_{sprint_num}.md (list: {list_id})")
-
-    # Rollover from previous sprint
-    prev_nums = sorted(n for n in existing_nums if n < sprint_num)
-    log(f"sprint_new: prev_nums={prev_nums}")
-    if prev_nums:
-        print()
-        log(f"sprint_new: rollover {prev_nums[-1]} -> {sprint_num}")
-        sprint_rollover(prev_nums[-1], sprint_num)
-        log("sprint_new: rollover done")
-
-    # Sync to pull in ClickUp tasks
     print()
     print("Running sync...")
     log("sprint_new: calling main()")
-    main(sprint_num)
+    main()
     log("sprint_new: main() returned")
+
+
+# ── Epic sync (pull-only) ──────────────────────────────────────────────────
+# Mirrors selected ClickUp lists ("epics") into standalone markdown files under
+# ~/notes/work_notes/epics/. Pull-only: status reflects ClickUp; local edits are
+# never pushed back. Only tasks assigned to the user are pulled. Configure the
+# lists in ~/.config/sprint-sync/epics.json: {"lists": [{"id": "...", "name": "..."}]}
+EPICS_CONFIG = os.path.expanduser("~/.config/sprint-sync/epics.json")
+EPICS_DIR = os.path.join(os.path.dirname(SPRINT_DIR), "epics")
+
+EPIC_FILE_TEMPLATE = """---
+id: epic_{slug}
+aliases: []
+tags:
+  - epics
+clickup_list_id: "{list_id}"
+epic: "{name}"
+---
+
+<!-- Pull-only mirror of ClickUp list "{name}". Status reflects ClickUp; local edits are NOT pushed back.
+Markers:  [ ] todo  [/] in progress  [>] qa  [~] blocked  [x] done  [c] closed -->
+
+# Tasks
+"""
+
+
+def _epic_slug(name):
+    s = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
+    return s or "epic"
+
+
+def _epic_status_marker(cu_status):
+    """Map a ClickUp status to a local marker for the pull-only mirror."""
+    s = (cu_status or "").lower()
+    if "closed" in s:
+        return "[c]"
+    if "done" in s:
+        return "[x]"
+    return STATUS_TO_MARKER.get(s, "[ ]")
+
+
+def load_epics():
+    """Read epic list config. Returns list of {id, name} dicts (possibly empty)."""
+    try:
+        with open(EPICS_CONFIG) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        out.error("epics.config", f"could not read {EPICS_CONFIG}: {e}")
+        return []
+    return [l for l in data.get("lists", []) if l.get("id")]
+
+
+def _ensure_epic_file(path, list_id, name):
+    if os.path.exists(path):
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    atomic_write(path, EPIC_FILE_TEMPLATE.format(
+        slug=_epic_slug(name), list_id=list_id, name=name))
+    out.info("epics.create", f"created {os.path.basename(path)}")
+
+
+def _epic_tasks_insert(lines):
+    """Return (lines, insert_idx) for the '# Tasks' section, creating it if absent."""
+    for i, line in enumerate(lines):
+        if line.strip() == "# Tasks":
+            return lines, i + 1
+    if lines and lines[-1].strip():
+        lines.append("\n")
+    lines.append("# Tasks\n")
+    return lines, len(lines)
+
+
+def sync_one_epic(epic):
+    """Pull-only mirror of a single epic list into its markdown file.
+
+    New tasks are added under '# Tasks'; existing tasks have their title and
+    marker refreshed from ClickUp in place (preserving any local note bullets).
+    """
+    list_id = epic["id"]
+    name = epic.get("name") or list_id
+    path = os.path.join(EPICS_DIR, f"{_epic_slug(name)}.md")
+    _ensure_epic_file(path, list_id, name)
+
+    tasks = get_clickup_tasks(list_id)  # assignee-filtered (mine only)
+    with open(path) as f:
+        lines = f.readlines()
+    local_tasks, lines = parse_sprint_file_lines(lines)
+
+    new_lines = []
+    updated = 0
+    for t in tasks:
+        cid = t.get("custom_id")
+        if not cid:
+            continue
+        tech = cid.replace("TECH-", "")
+        cu_title = t["name"]
+        marker = _epic_status_marker((t.get("status") or {}).get("status"))
+        if tech in local_tasks:
+            local = local_tasks[tech]
+            if cu_title and cu_title != local["title"]:
+                lines = _update_task_title(lines, local["line"], cu_title)
+                updated += 1
+            if local["marker"] != marker:
+                lines = _update_task_marker(lines, local["line"], marker)
+                updated += 1
+        else:
+            new_lines.append(format_task_line(tech, marker, cu_title))
+
+    if new_lines:
+        lines, idx = _epic_tasks_insert(lines)
+        for nl in new_lines:
+            lines.insert(idx, nl)
+            idx += 1
+
+    if DRY_RUN:
+        print(f"  [dry-run] {name}: {len(new_lines)} new, {updated} updated")
+    else:
+        atomic_write(path, lines)
+        out.summary(f"  {name}: {len(new_lines)} new, {updated} updated ({os.path.basename(path)})")
+    return path, len(new_lines), updated
+
+
+def _commit_stamp():
+    """Local date+time for commit subjects — several syncs a day, date alone collides."""
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+def _git_commit_dir(target_dir, label):
+    """Stage + commit + push a single directory. Silent if clean / no git."""
+    import subprocess
+    if not os.path.isdir(target_dir):
+        return
+    try:
+        top = subprocess.check_output(
+            ["git", "-C", target_dir, "rev-parse", "--show-toplevel"],
+            stderr=subprocess.DEVNULL, text=True,
+        ).strip()
+    except subprocess.CalledProcessError:
+        return  # not a git repo
+    rel = os.path.relpath(target_dir, top)
+    subprocess.run(["git", "-C", top, "add", rel], stderr=subprocess.DEVNULL)
+    if subprocess.run(["git", "-C", top, "diff", "--cached", "--quiet"]).returncode == 0:
+        return  # nothing staged
+    msg = f"sprint-sync: {label} ({_commit_stamp()})"
+    r = subprocess.run(["git", "-C", top, "commit", "-m", msg],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if r.returncode != 0:
+        print(f"  Commit failed:\n{r.stdout.strip()}")
+        return
+    print(f"  Committed: {msg}")
+    p = subprocess.run(["git", "-C", top, "push"],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    print("  Pushed." if p.returncode == 0 else
+          f"  Push failed (commit kept locally):\n{p.stdout.strip()}")
+
+
+def sync_epics():
+    """Pull-only sync of all configured epic lists into ~/notes/work_notes/epics/."""
+    epics = load_epics()
+    if not epics:
+        out.info("epics", f"no epics configured (see {EPICS_CONFIG})")
+        return
+    out.info("epics", f"syncing {len(epics)} epic(s)")
+    touched = False
+    for epic in epics:
+        try:
+            sync_one_epic(epic)
+            touched = True
+        except Exception as e:
+            out.error("epics.sync", f"{epic.get('name', epic.get('id'))}: {e}")
+    if touched and not DRY_RUN:
+        _git_commit_dir(EPICS_DIR, "epics")
 
 
 def main(target_sprint_num=None):
@@ -2321,8 +2666,12 @@ def main(target_sprint_num=None):
         sys.exit(1)
     print(f"ClickUp list: {list_id}")
 
-    # Fetch ClickUp tasks
-    clickup_tasks = get_clickup_tasks(list_id)
+    # Fetch ClickUp tasks. The no-assignee list scan (used later for drift
+    # detection) is independent, so warm its cache concurrently here.
+    with ThreadPoolExecutor(max_workers=2) as _ex:
+        _f_tasks = _ex.submit(get_clickup_tasks, list_id)
+        _ex.submit(get_list_task_tech_ids, list_id)
+        clickup_tasks = _f_tasks.result()
     print(f"ClickUp tasks assigned to you: {len(clickup_tasks)}")
 
     # Parse local file
@@ -2336,14 +2685,14 @@ def main(target_sprint_num=None):
     placements.update(snapshot_placements(lines))
 
     # Resolve any PENDING tasks from prior syncs
-    print("RESOLVE PENDING:")
+    out.info("phase.pending", "begin")
     lines = sync_resolve_pending(lines)
     print()
     if not DRY_RUN:
         atomic_write(filepath, lines)
 
     # Park deferred NEW_XX tasks under # Future Projects
-    print("ORGANIZE FUTURE:")
+    out.info("phase.organize_future", "begin")
     lines = organize_future_projects(lines, current_sprint=sprint_num)
     print()
     if not DRY_RUN:
@@ -2352,7 +2701,7 @@ def main(target_sprint_num=None):
     # Create NEW tasks (matured NEW_XX get their TECH line in place, which
     # is inside # Future Projects — the next organize pass promotes them)
     if not PULL_ONLY:
-        print("CREATE:")
+        out.info("phase.create", "begin")
         lines = sync_create(filepath, lines, clickup_tasks)
         print()
 
@@ -2365,13 +2714,13 @@ def main(target_sprint_num=None):
     local_tasks, lines = parse_sprint_file(filepath)
 
     # Pull new tasks
-    print("PULL:")
+    out.info("phase.pull", "begin")
     lines = sync_pull(filepath, clickup_tasks, local_tasks, lines, placements=placements)
     print()
 
     # Create subtasks for child lines without IDs
     if not PULL_ONLY:
-        print("CREATE SUBTASKS:")
+        out.info("phase.create_subtasks", "begin")
         lines = sync_create_subtasks(lines, clickup_tasks)
         print()
 
@@ -2389,14 +2738,14 @@ def main(target_sprint_num=None):
         done_tech_ids, deleted_tech_nums, pushed_next_tech_nums = [], [], []
         push_target_map, file_to_section_map, failed_move_tech_nums = {}, {}, set()
     else:
-        print("PUSH:")
+        out.info("phase.push", "begin")
         done_tech_ids, deleted_tech_nums, pushed_next_tech_nums, push_target_map, file_to_section_map, failed_move_tech_nums = sync_push(
             local_tasks, clickup_tasks, current_sprint_num=sprint_num, list_id=list_id
         )
         print()
 
         # Push parent/nesting changes
-        print("PUSH PARENTS:")
+        out.info("phase.push_parents", "begin")
         sync_push_parents(local_tasks, clickup_tasks)
         print()
 
@@ -2496,7 +2845,7 @@ def main(target_sprint_num=None):
 
     # File alpha-topic-marker lines into matching section inside sprint file
     if file_to_section_map:
-        print("FILE:")
+        out.info("phase.file", "begin")
         with open(filepath) as f:
             current_lines = f.readlines()
 
@@ -2556,16 +2905,16 @@ def main(target_sprint_num=None):
     # is NOT parked for a future sprint (no `>> NN` suffix). Keeps local
     # invariant: everything present here is either current-sprint or
     # explicitly future-parked.
-    print("ATTACH STALE:")
+    out.info("phase.attach_stale", "begin")
     with open(filepath) as f:
         current_lines = f.readlines()
     local_now, _ = parse_sprint_file_lines(current_lines)
-    # Skip tasks already parked in any sync-managed bucket: # Future
-    # Projects, # Drifted, # Failed to Move. Without this, drift
-    # detection re-fires every sync against tasks that are already
-    # routed there (ClickUp's stale-locations bug never resolves).
+    # Skip tasks the user deliberately parked: # Future Projects and
+    # # Failed to Move. # Drifted is intentionally NOT skipped — drifted tasks
+    # are re-checked each run so they can heal (the partition below trusts the
+    # per-task locations record, so a real sprint task won't re-drift).
     in_parked = set()
-    for heading in ("# Future Projects", "# Drifted", "# Failed to Move"):
+    for heading in ("# Future Projects", "# Failed to Move"):
         s, e = _find_section_range(current_lines, heading)
         if s is None:
             continue
@@ -2609,9 +2958,16 @@ def main(target_sprint_num=None):
             continue
         remote_locs = {loc.get("id") for loc in remote.get("locations") or []}
         if list_id in remote_locs:
-            # ClickUp record claims sprint membership but list view disagrees
-            print(f"  DRIFT TECH-{tech_num}: secondary to Sprint {sprint_num} is stale — routing to # Drifted")
-            drifted_tech_nums.add(tech_num)
+            # The task's own record places it in this sprint — authoritative.
+            # The team scan (cu_ids) and list view are both incomplete (they
+            # silently omit some tasks), so trust the per-task locations rather
+            # than banishing real work to # Drifted. Warn when the scan missed
+            # it so the inconsistency stays visible.
+            attached_tech_nums.add(tech_num)
+            if tech_num not in cu_ids:
+                out.warning("attach.scan_miss",
+                            f"TECH-{tech_num}: in sprint per task record but missing "
+                            f"from team scan/list view — treating as attached.")
             continue
         to_attach.append((tech_num, remote))
 
@@ -2668,13 +3024,37 @@ def main(target_sprint_num=None):
     # Promote every task attached to the current sprint list into
     # # Current Sprint. Tasks NOT in the current list stay in their
     # topical section (user-filed home).
-    print("PROMOTE TO CURRENT:")
+    out.info("phase.promote", "begin")
     with open(filepath) as f:
         current_lines = f.readlines()
     current_ids = {(t.get("custom_id") or "").replace("TECH-", "")
                    for t in clickup_tasks if t.get("custom_id")}
     current_ids |= attached_tech_nums  # newly-attached this run
     cs_start, cs_end = _find_section_range(current_lines, "# Current Sprint")
+    # Sticky destinations: don't promote tasks back out of these — the user
+    # (or sync) put them there deliberately, and promoting them creates a
+    # bounce loop with ATTACH STALE on the next run.
+    sticky_ranges = []
+    for h in ("# Drifted", "# Failed to Move"):
+        s, e = _find_section_range(current_lines, h)
+        if s is not None:
+            sticky_ranges.append((s, e))
+
+    def _in_sticky(idx):
+        return any(s <= idx < e for s, e in sticky_ranges)
+
+    # Let # Drifted tasks through to the current_ids gate below: a drifted
+    # task that's now back in the assignee-filtered sprint fetch (current_ids)
+    # has healed and should promote out. A still-drifting task isn't in
+    # current_ids, so the gate leaves it. It won't bounce — once it's in
+    # current_ids the attach phase treats it as attached, not drift.
+    # (# Failed to Move stays sticky.) Note: true_list_ids is NOT used here —
+    # ClickUp's list-view index is unreliable in this workspace.
+    drifted_s, drifted_e = _find_section_range(current_lines, "# Drifted")
+
+    def _in_drifted(idx):
+        return drifted_s is not None and drifted_s <= idx < drifted_e
+
     moved = 0
     if cs_start is not None and current_ids:
         to_promote = []
@@ -2686,6 +3066,8 @@ def main(target_sprint_num=None):
                 continue
             tnum = m.group(3) or m.group(4)
             marker_body = m.group(2).strip()
+            if _in_sticky(i) and not _in_drifted(i):
+                continue
             # Don't promote closed tasks or tasks deferred via [NN] / [FF]
             # (user explicitly targeted a future sprint — leave marker alone).
             if (tnum in current_ids
@@ -2729,13 +3111,25 @@ def main(target_sprint_num=None):
     print()
 
     # Move done items to # Done section
-    print("MOVE DONE:")
+    out.info("phase.move_done", "begin")
     with open(filepath) as f:
         current_lines = f.readlines()
     current_lines = move_done_to_done_section(current_lines)
     if not DRY_RUN:
         atomic_write(filepath, current_lines)
     print()
+
+    # Hold items: surface every sync so parked work gets a deliberate decision.
+    cs_s, cs_e = _find_section_range(current_lines, "# Current Sprint")
+    if cs_s is not None:
+        holds = [current_lines[i].strip()
+                 for i in range(cs_s + 1, cs_e)
+                 if (m := TASK_LINE_PATTERN.match(current_lines[i])) and m.group(2) == "h"]
+        if holds:
+            print(f"HOLD ITEMS ({len(holds)}) — decide each: keep [h], reactivate [ ]/[/], or defer [NN]/[FF]:")
+            for h in holds:
+                print(f"  {h}")
+            print()
 
     # Prompt to close any agent sessions tied to done tasks
     if not DRY_RUN:
@@ -2751,11 +3145,11 @@ def main(target_sprint_num=None):
     if not DRY_RUN:
         commit_and_push_notes(filepath)
 
-    print("Sync complete.")
+    out.summary("Sync complete.")
 
 
 def commit_and_push_notes(filepath):
-    """Stage the sprint file + placements, commit if dirty, push to origin.
+    """Stage the whole notes repo, commit if dirty, push to origin.
     Silent if nothing changed or git isn't reachable."""
     import subprocess
     repo = os.path.dirname(os.path.dirname(os.path.abspath(filepath)))  # ~/notes/work_notes -> ~/notes
@@ -2768,10 +3162,10 @@ def commit_and_push_notes(filepath):
     except subprocess.CalledProcessError:
         return  # not a git repo, skip silently
 
-    sprint_dir = os.path.relpath(SPRINT_DIR, top)
-    print("\nGIT:")
-    # Stage sprint dir (covers sprint files + .placements.json)
-    subprocess.run(["git", "-C", top, "add", sprint_dir],
+    out.info("phase.git", "begin")
+    # Stage the whole repo: sprint files, .placements.json, and any other
+    # notes edited alongside the sync (checklists, to-dos, epic notes).
+    subprocess.run(["git", "-C", top, "add", "-A", top],
                    stderr=subprocess.DEVNULL)
     # Nothing to commit?
     diff = subprocess.run(["git", "-C", top, "diff", "--cached", "--quiet"])
@@ -2779,8 +3173,14 @@ def commit_and_push_notes(filepath):
         print("  Nothing to commit.")
         return
 
-    sprint_name = os.path.basename(filepath).removesuffix(".md")
-    msg = f"sprint-sync: {sprint_name} ({date.today().isoformat()})"
+    staged = subprocess.run(["git", "-C", top, "diff", "--cached", "--name-only"],
+                            stdout=subprocess.PIPE, text=True).stdout.split()
+    for f in staged:
+        print(f"    {f}")
+
+    sprint_num = get_sprint_number(filepath)
+    label = f"sprint {sprint_num}" if sprint_num else os.path.basename(filepath).removesuffix(".md")
+    msg = f"sprint-sync: {label} ({_commit_stamp()})"
     r = subprocess.run(["git", "-C", top, "commit", "-m", msg],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if r.returncode != 0:
@@ -2796,21 +3196,29 @@ def commit_and_push_notes(filepath):
 
 
 if __name__ == "__main__":
-    args = [a for a in sys.argv[1:] if a not in ("--dry-run", "--pull-only", "pull")]
+    args = [a for a in sys.argv[1:] if a not in ("--dry-run", "--pull-only", "pull", "--verbose", "-v")]
 
     if not TOKEN:
         print("Error: CLICKUP_TOKEN not set. Add it to ~/.env")
         sys.exit(1)
 
-    if args and args[0] == "rollover":
-        from_num = int(args[1]) if len(args) > 1 else None
-        to_num = int(args[2]) if len(args) > 2 else None
-        log(f"entry: rollover from={from_num} to={to_num}")
-        sprint_rollover(from_num, to_num)
+    if args and args[0] == "epics":
+        log("entry: sync_epics")
+        sync_epics()
+        log("entry: sync_epics done")
+    elif args and args[0] == "rollover":
+        to_num = int(args[1]) if len(args) > 1 else None
+        log(f"entry: rollover to={to_num}")
+        sprint_rollover(to_num)
+        if not DRY_RUN:
+            commit_and_push_notes(find_current_sprint_file())
         log("entry: rollover done")
     elif args and args[0] == "new":
-        log("entry: sprint_new")
-        sprint_new()
+        new_num = None
+        if len(args) > 1 and args[1].isdigit():
+            new_num = int(args[1])
+        log(f"entry: sprint_new num={new_num}")
+        sprint_new(new_num)
         log("entry: sprint_new done")
     else:
         # Optional sprint number: sprint-sync [--dry-run] [26]

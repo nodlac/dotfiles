@@ -65,7 +65,7 @@ vim.api.nvim_create_user_command('SprintSync', function(opts)
   local sprint_buf = vim.api.nvim_get_current_buf()
   local sprint_win = vim.api.nvim_get_current_win()
   local bufname = vim.api.nvim_buf_get_name(sprint_buf)
-  if not bufname:match('sprint_%d+%.md$') then
+  if not bufname:match('sprint_%w+%.md$') then
     vim.notify('SprintSync: not a sprint file', vim.log.levels.WARN)
     return
   end
@@ -89,7 +89,7 @@ vim.api.nvim_create_user_command('SprintSync', function(opts)
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
     if b ~= sprint_buf and vim.api.nvim_buf_is_loaded(b) and vim.bo[b].modified then
       local n = vim.api.nvim_buf_get_name(b)
-      if n:match('sprint_%d+%.md$') then
+      if n:match('sprint_%w+%.md$') then
         pcall(vim.api.nvim_buf_call, b, function() vim.cmd('silent write') end)
       end
     end

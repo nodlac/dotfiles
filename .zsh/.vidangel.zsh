@@ -9,7 +9,7 @@ autoload -U compinit; compinit
 # Work Functions
 ##########################################################
 connect-lepotato() {
-     ssh -i ~/.ssh/lepotato -p 83 ubuntu@136.38.39.34
+     ssh -i ~/.ssh/lepotato -p 83 ubuntu@136.38.167.119
 }
 
 ##########################################################
@@ -24,15 +24,29 @@ _va_ensure_colima() {
     fi
 }
 
+# All groups except 'gpu' — that group pins Linux/Windows-only CUDA wheels
+# (nvidia-*-cu12) with no macOS arm64 builds, so --all-groups alone fails here.
+_VA_UV_SYNC=(uv sync --all-groups --no-group gpu)
+
+# Sync + activate the backend checkout for the current shell (worktree-aware):
+# resolve the checkout from $PWD, pull, install deps, activate the venv. uv sync
+# creates .venv when absent, so a fresh worktree bootstraps here too.
 _va_ensure_repo() {
-    cd ~/vidangel-repo/vidangel-backend
+    local root; root=$(_va_backend_root)
+    cd "$root" || return 1
     git pull
-    uv sync --all-groups
+    "${_VA_UV_SYNC[@]}" || return 1
     source .venv/bin/activate
 }
 
+# Render .env from the repo's tracked template (+ vault secrets) into CWD.
+# Operates in the current dir so it works for both the main repo and worktrees;
+# callers cd to the target checkout first.
 _va_ensure_env() {
-    cd ~/vidangel-repo/vidangel-backend
+    if [[ ! -f .templates/dev.env.hbs ]]; then
+        echo "  No .templates/dev.env.hbs in $PWD — cannot build .env."
+        return 1
+    fi
     vault-refresh-token
     w2 .templates/dev.env.hbs > .env
 }
@@ -137,6 +151,19 @@ _va_ensure_db_data() {
     return 1
 }
 
+# Shared boot core: render this checkout's .env + bring up the shared infra
+# (colima, containers, readiness waits). Idempotent — no-ops when already up, so
+# a warm call is cheap, a cold one bootstraps. Callers cd to the target checkout
+# (and activate the venv) first. Used by start-backend + switch-backend.
+_va_boot() {
+    _va_ensure_env         || return 1
+    _va_ensure_colima      || return 1
+    _va_ensure_containers  || return 1
+    _va_wait_for_postgres  || return 1
+    _va_wait_for_redis     || return 1
+    _va_wait_for_typesense || return 1
+}
+
 
 vidangel-start-apple() {
     local dest device
@@ -208,40 +235,26 @@ vidangel-start-apple() {
 # Public functions
 ##########################################################
 
-# Zero to working in one command
+# Zero to working in one command (worktree-aware: bootstraps THIS checkout).
 vidangel-start-backend() {
-    echo "=== VidAngel Backend Setup ==="
+    local root; root=$(_va_backend_root)
+    echo "=== VidAngel Backend Setup -> $root ==="
     echo ""
+    cd "$root" || return 1
 
-    echo "[1/7] Colima"
-    _va_ensure_colima || return 1
+    echo "[1/4] Infra & environment"
+    _va_boot || return 1
 
-    echo "[2/7] Repository & dependencies"
-    _va_ensure_repo || return 1
-
-    echo "[3/7] Environment"
-    _va_ensure_env || return 1
-
-    echo "[4/7] Docker containers"
-    _va_ensure_containers || return 1
-
-    echo "[5/7] Service readiness"
-    _va_wait_for_postgres || return 1
-    _va_wait_for_redis || return 1
-    _va_wait_for_typesense || return 1
-
-    echo "[6/7] Database data"
+    echo "[2/4] Database data"
     _va_ensure_db_data || return 1
 
-    echo "[7/7] Migrations & search index"
+    # Repo sync (git pull + uv sync + activate) happens inside reset-server via
+    # _va_ensure_repo, so the venv this checkout needs is built here too.
+    echo "[3/4] Repository, migrations & search index"
     vidangel-reset-server || return 1
 
     echo ""
-    echo "=== Running preflight checks ==="
-    vidangel-preflight || return 1
-
-    echo ""
-    echo "=== Starting dev server ==="
+    echo "[4/4] Dev server"
     vidangel-run-devserver
 }
 
@@ -368,13 +381,8 @@ vidangel-preflight() {
     fi
 }
 
-vidangel-run-devserver() {
-    vidangel-preflight || { echo ""; echo "Fix the above failures before starting the server."; return 1; }
-    echo ""
-
-    cd ~/vidangel-repo/vidangel-backend
-    source .venv/bin/activate
-
+# Dev-server env exports (shared by run-devserver and switch-backend)
+_va_devserver_env() {
     export CELERY_TASK_ALWAYS_EAGER=False
     export DISABLE_FINNEGAN_ANALYTICS=True
     export DISABLE_ITERABLE=True
@@ -384,8 +392,142 @@ vidangel-run-devserver() {
     export ENABLE_TRACING_MIDDLEWARE=False
     export FILTER_HOST=https://sepia.vidangel.com
     export PYTHONUNBUFFERED=1
+}
 
-    python3 manage.py runserver_debug --skip-checks --skip-migration-checks --print-sql-location --reloader-type=watchdog
+_va_runserver() {
+    local certs="$HOME/vidangel-repo/vidangel-backend/server/certs"
+    if [[ ! -f "$certs/localhost.pem" || ! -f "$certs/localhost-key.pem" ]]; then
+        echo "  No HTTPS certs found. Generating via server/gen-certs.sh..."
+        "$HOME/vidangel-repo/vidangel-backend/server/gen-certs.sh" || return 1
+    fi
+    python3 manage.py runserver_debug --cert-file "$certs/localhost.pem" --key-file "$certs/localhost-key.pem" --skip-checks --skip-migration-checks --print-sql-location --reloader-type=watchdog
+}
+
+# Resolve the backend checkout for the current shell (worktree-aware): walk up
+# from $PWD looking for a Django backend root, else fall back to the main repo.
+_va_backend_root() {
+    local d="$PWD"
+    while [[ "$d" != "/" ]]; do
+        if [[ -f "$d/manage.py" && -d "$d/vidangel_backend" ]]; then
+            echo "$d"; return 0
+        fi
+        d=$(dirname "$d")
+    done
+    echo "$HOME/vidangel-repo/vidangel-backend"
+}
+
+vidangel-run-devserver() {
+    vidangel-preflight || { echo ""; echo "Fix the above failures before starting the server."; return 1; }
+    echo ""
+
+    # Worktree-aware: run the checkout for THIS shell, not always the main repo.
+    local root; root=$(_va_backend_root)
+    cd "$root" || return 1
+    if [[ ! -f .venv/bin/activate ]]; then
+        echo "  No .venv in $root — run 'vidangel-switch-backend' to build it."
+        return 1
+    fi
+    source .venv/bin/activate
+    _va_devserver_env
+    _va_runserver
+}
+
+# Interactive worktree picker: list every backend worktree, pick one, switch.
+vidangel-pick-worktree() {
+    local main=$HOME/vidangel-repo/vidangel-backend
+    local -a lines
+    lines=("${(@f)$(git -C "$main" worktree list)}")
+    if (( ${#lines} == 0 )); then
+        echo "No worktrees found."; return 1
+    fi
+    echo "Select worktree:"
+    local i=1 l
+    for l in "${lines[@]}"; do
+        printf "  %d) %s\n" "$i" "$l"
+        ((i++))
+    done
+    echo -n "  # [1-${#lines}]: "
+    local choice; read -r choice
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#lines} )); then
+        echo "Invalid selection."; return 1
+    fi
+    # First whitespace-delimited field of the chosen line is the worktree path.
+    local path="${${(z)lines[$choice]}[1]}"
+    echo "=== Selected $path ==="
+    cd "$path" || return 1
+    vidangel-switch-backend
+}
+
+# Kill whatever Django dev server is currently running (any worktree) and free
+# its port. Matches both the reloader parent and child runserver processes.
+vidangel-kill-backend() {
+    local pids
+    pids=$(pgrep -f "manage.py runserver" 2>/dev/null)
+    if [[ -n "$pids" ]]; then
+        echo "  Killing current backend (pids: $(echo $pids | tr '\n' ' '))"
+        echo "$pids" | xargs kill 2>/dev/null
+        sleep 1
+        pids=$(pgrep -f "manage.py runserver" 2>/dev/null)
+        [[ -n "$pids" ]] && echo "$pids" | xargs kill -9 2>/dev/null
+    else
+        echo "  No running backend found."
+    fi
+    # Free port 8000 if anything still holds it
+    local port_pids
+    port_pids=$(lsof -tiTCP:8000 -sTCP:LISTEN 2>/dev/null)
+    [[ -n "$port_pids" ]] && { echo "  Freeing port 8000"; echo "$port_pids" | xargs kill -9 2>/dev/null; }
+}
+
+# Kill the current backend and run the one for THIS checkout (worktree-aware).
+vidangel-switch-backend() {
+    local root; root=$(_va_backend_root)
+    echo "=== Switching backend -> $root ==="
+    vidangel-kill-backend
+
+    cd "$root" || return 1
+
+    # Worktrees start without a .venv (gitignored, not carried over). Build one
+    # with 'uv sync' so this branch's exact deps are installed. We don't copy the
+    # main repo's .venv: venvs aren't relocatable (absolute paths in pyvenv.cfg /
+    # bin shebangs / activate), and uv's global cache makes a fresh sync fast.
+    if [[ ! -f .venv/bin/activate ]]; then
+        echo "  No .venv in worktree — creating with '${_VA_UV_SYNC[*]}'..."
+        # Remove any partial venv from a previous failed sync so we start clean,
+        # and tear it down again if this sync fails (a half-built venv would
+        # otherwise pass the activate check above on the next run).
+        rm -rf .venv
+        "${_VA_UV_SYNC[@]}" || { echo "  uv sync failed."; rm -rf .venv; return 1; }
+    fi
+    source .venv/bin/activate
+    _va_devserver_env
+
+    # .env render + shared infra up (idempotent: warm switch no-ops, cold one
+    # bootstraps).
+    _va_boot || return 1
+
+    # Branches diverge on the shared dev DB — apply any pending migrations.
+    _va_apply_migrations
+
+    # NOT done here (deliberately — these mutate shared state and are slow; run
+    # 'vidangel-start-backend' or 'vidangel-reset-server' if a branch needs them):
+    #   - dev.dump restore (assumes the shared DB already has data)
+    #   - makemigrations (migrations should be committed, not auto-generated)
+    #   - run_update_popularity / update_search / offerings_materialized_view
+    #     (shared search index + offerings view, already populated)
+    echo "=== Starting backend from $root ==="
+    _va_runserver
+}
+
+# Auto-apply any unapplied migrations for the current backend checkout.
+_va_apply_migrations() {
+    local unapplied
+    unapplied=$(python3 manage.py showmigrations 2>/dev/null | grep -c '\[ \]')
+    if [[ "$unapplied" -gt 0 ]]; then
+        echo "  Applying $unapplied pending migration(s)..."
+        python3 manage.py migrate
+    else
+        echo "  Migrations up to date."
+    fi
 }
 
 vidangel-stop-backend() {
@@ -441,7 +583,14 @@ export PATH="$PATH:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools"
 ##########################################################
 alias bim="python3 ~/vidangel-repo/vidangel-backend/manage.py"
 alias va-management='eva -i i-00d603407628a0d0e'
-alias vault-refresh-token="vault login -method=userpass username=$VAULT_USER password=$VAULT_PASS"
+# Function not alias: _va_ensure_env (defined earlier) calls this, and zsh
+# expands aliases at function-parse time — an alias defined here would be unknown
+# up there. A function resolves at call time, so order doesn't matter, and
+# $VAULT_USER/$VAULT_PASS expand fresh on each call instead of being baked in.
+# unalias guard: clears any stale alias left in the shell from a prior source,
+# which would otherwise make zsh choke parsing the function definition below.
+unalias vault-refresh-token 2>/dev/null
+vault-refresh-token() { vault login -method=userpass username="$VAULT_USER" password="$VAULT_PASS"; }
 alias p-bim="pgcli -h localhost -p 24603 -d vidangel -u $FINNEGAN_USER -W $FINNEGAN_PASS"
 alias p-finnegan=""
 

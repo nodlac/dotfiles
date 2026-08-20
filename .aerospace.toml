@@ -13,6 +13,22 @@ start-at-login = false
 # Mouse follows focus when focused monitor changes
 on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
 
+# Simulator device windows are fixed-aspect-ratio and reject resize. Tiled, they
+# hold a slot they can't fill and squeeze every sibling. Blank-title phantom
+# windows do the same while being invisible.
+[[on-window-detected]]
+if.app-id = 'com.apple.iphonesimulator'
+run = 'layout floating'
+
+# Android emulator + scrcpy report NULL-APP-BUNDLE-ID, so match on app name.
+[[on-window-detected]]
+if.app-name-regex-substring = 'qemu-system'
+run = 'layout floating'
+
+[[on-window-detected]]
+if.app-name-regex-substring = 'scrcpy'
+run = 'layout floating'
+
 [mode.main.binding]
     # See: https://nikitabobko.github.io/AeroSpace/goodies#open-a-new-window-with-applescript
     alt-enter = '''exec-and-forget osascript -e '

@@ -28,8 +28,35 @@ fi
 
 echo "Opening SSH tunnel for $db..."
 
+# Refresh expired vault token non-interactively via userpass before any
+# call that needs it. Avoids the "broken connect" path where curl to eva
+# silently 403s and evaql ends up prompting in a tmux pane that nvim can't
+# see. Requires VAULT_USER + VAULT_PASS already in env (set in ~/.env).
+ensure_vault_token() {
+    command -v vault &>/dev/null || return 0
+    vault token lookup &>/dev/null && return 0
+    # Try renewing an existing-but-near-expiry token first (cheap).
+    vault token renew &>/dev/null && return 0
+    # Re-login. Userpass only — extend if you ever switch methods.
+    if [[ -n "${VAULT_USER:-}" && -n "${VAULT_PASS:-}" ]]; then
+        local token
+        token=$(vault login -token-only -method=userpass \
+            username="$VAULT_USER" password="$VAULT_PASS" 2>/dev/null) || return 1
+        [[ -n "$token" ]] || return 1
+        export VAULT_TOKEN="$token"
+        # Persist for other shells (vault CLI's default cache path).
+        umask 077
+        printf '%s' "$token" > ~/.vault-token
+        echo "vault: refreshed token via userpass" >&2
+        return 0
+    fi
+    echo "vault: token expired and VAULT_USER/VAULT_PASS not set — run 'vault login -method=userpass username=<you>' manually" >&2
+    return 1
+}
+
 # Auto-accept unknown SSH host keys for the target server
 if command -v vault &>/dev/null; then
+    ensure_vault_token || true
     tunnel_ip=$(curl -ss "https://eva.vidangel.us/product/$domain/$env" \
         -H "X-Vault-Token: $(vault print token)" --fail 2>/dev/null | awk '{print $1}')
     if [[ -n "$tunnel_ip" ]] && ! ssh-keygen -F "$tunnel_ip" &>/dev/null; then

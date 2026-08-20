@@ -38,6 +38,7 @@ return {
       vim.api.nvim_create_autocmd('FileType', {
         pattern = 'dbui',
         callback = function()
+          vim.wo.number = true
           vim.keymap.set('n', 't', '<Plug>(DBUI_SelectLine)', { buffer = true, desc = 'DBUI toggle' })
           -- < closes an expanded node, > opens a collapsed one. dadbod-ui
           -- only exposes a toggle plug, so check expansion state on the
@@ -84,6 +85,104 @@ return {
       vim.keymap.set('n', '<leader><CR>', 'vip:DB<cr>', { desc = 'Run SQL block' })
       vim.keymap.set('n', '<S-CR>', 'vip:DB<cr>', { desc = 'Run SQL block' })
       vim.keymap.set('i', '<S-CR>', '<Esc>vip:DB<cr>', { desc = 'Run SQL block' })
+
+      -- ── Export the SQL block under the cursor to ~/Downloads/<name>.csv ──
+      -- alt+shift+enter (<M-S-CR>), <leader>re, or :DBExportCSV [name].
+      -- Runs the same block <S-CR> runs (the paragraph around the cursor)
+      -- through `psql --csv` against this buffer's b:db connection.
+      local function db_name_for_url(url)
+        for _, db in ipairs(vim.g.dbs or {}) do
+          if db.url == url then return db.name end
+        end
+      end
+
+      -- The blank-line-delimited paragraph around the cursor (mirrors `vip`).
+      local function sql_paragraph()
+        local cur = vim.api.nvim_win_get_cursor(0)[1]
+        local total = vim.api.nvim_buf_line_count(0)
+        local function blank(n) return vim.fn.getline(n):match('^%s*$') ~= nil end
+        local s, e = cur, cur
+        while s > 1 and not blank(s - 1) do s = s - 1 end
+        while e < total and not blank(e + 1) do e = e + 1 end
+        return table.concat(vim.api.nvim_buf_get_lines(0, s - 1, e, false), '\n')
+      end
+
+      local function export_csv(name)
+        local url = vim.b.db
+        if not url or url == '' then
+          vim.notify('No DB on this buffer (b:db unset) — open a query via <leader>rt or DBUI',
+            vim.log.levels.ERROR)
+          return
+        end
+        local sql = sql_paragraph()
+        if sql:match('^%s*$') then
+          vim.notify('No SQL under cursor', vim.log.levels.WARN)
+          return
+        end
+
+        -- Filename ("variable name") — prompt if not passed to :DBExportCSV.
+        if not name or name == '' then
+          name = vim.fn.input('CSV name: ')
+        end
+        if name == '' then return end
+        name = name:gsub('%.csv$', ''):gsub('[^%w._-]', '_')
+        local out = vim.fn.expand('~/Downloads/') .. name .. '.csv'
+
+        -- Bring the tunnel up first (best-effort; no-op if already connected).
+        local dbn = db_name_for_url(url)
+        if dbn then ensure_tunnel(dbn) end
+
+        -- SQL → temp file (avoids shell-escaping the whole query); prepend a
+        -- server-side timeout matching the dadbod adapter param.
+        local tmp = vim.fn.tempname() .. '.sql'
+        vim.fn.writefile(vim.split("SET statement_timeout = '300s';\n" .. sql, '\n'), tmp)
+
+        local shellcmd = string.format(
+          'psql %s --csv -v ON_ERROR_STOP=1 -f %s > %s',
+          vim.fn.shellescape(url), vim.fn.shellescape(tmp), vim.fn.shellescape(out))
+
+        vim.notify('Exporting → ' .. out .. ' …', vim.log.levels.INFO)
+        local err = {}
+        vim.fn.jobstart({ 'sh', '-c', shellcmd }, {
+          stderr_buffered = true,
+          on_stderr = function(_, data)
+            for _, l in ipairs(data or {}) do
+              if l ~= '' then table.insert(err, l) end
+            end
+          end,
+          on_exit = function(_, code)
+            pcall(os.remove, tmp)
+            vim.schedule(function()
+              if code == 0 then
+                local rows = 0
+                local f = io.open(out, 'r')
+                if f then
+                  for _ in f:lines() do rows = rows + 1 end
+                  f:close()
+                end
+                vim.notify(string.format('Exported %d row(s) → %s', math.max(rows - 1, 0), out),
+                  vim.log.levels.INFO)
+              else
+                vim.notify('Export failed (psql ' .. code .. '):\n' .. table.concat(err, '\n'),
+                  vim.log.levels.ERROR)
+              end
+            end)
+          end,
+        })
+      end
+
+      vim.api.nvim_create_user_command('DBExportCSV', function(opts)
+        export_csv(opts.args)
+      end, { nargs = '?', desc = 'Export SQL block under cursor to ~/Downloads/<name>.csv' })
+
+      -- alt+shift+enter; <leader>re is a fallback if the terminal doesn't
+      -- forward the alt (meta) modifier to Neovim.
+      vim.keymap.set('n', '<M-S-CR>', function() export_csv() end,
+        { desc = 'Export SQL block to CSV (Downloads)' })
+      vim.keymap.set('i', '<M-S-CR>', function() vim.cmd('stopinsert'); export_csv() end,
+        { desc = 'Export SQL block to CSV (Downloads)' })
+      vim.keymap.set('n', '<leader>re', function() export_csv() end,
+        { desc = 'Export SQL block to CSV (Downloads)' })
 
       -- ── Fuzzy table search across all configured DBs ────────────────────
       -- Telescope picker over `db / table` — type freely, results match
