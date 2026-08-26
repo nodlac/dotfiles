@@ -286,7 +286,32 @@ set_macos_defaults() {
     defaults write NSGlobalDomain InitialKeyRepeat -int 15
 
     echo "  Key repeat set (fast)"
+
+    disable_hotkey_collisions
+
     echo "  NOTE: Set Caps Lock -> Escape in System Settings > Keyboard > Modifier Keys"
+}
+
+# ───────────────────────────────────────────
+# macOS hotkeys that collide with i3-parity bindings
+# ───────────────────────────────────────────
+# Only the ones that actually steal a key we bind. Spotlight (64) is left ON
+# because aerospace's alt-d synthesizes cmd-space to reach it.
+disable_hotkey_collisions() {
+    echo "=== Disabling colliding macOS hotkeys ==="
+
+    # 60/61: select previous/next input source. Eats ctrl-space = tmux prefix.
+    # 164: Dictation. Fires on a double-tap of ctrl, which tmux prefix does constantly.
+    for id in 60 61 164; do
+        defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys \
+            -dict-add "$id" '<dict><key>enabled</key><false/></dict>'
+    done
+
+    # Reload the hotkey daemon so the changes take without a logout.
+    /System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings -u 2>/dev/null || true
+
+    echo "  Disabled: input-source switching (ctrl-space), Dictation (double-ctrl)"
+    echo "  Kept: Spotlight cmd-space (aerospace alt-d depends on it)"
 }
 
 # ───────────────────────────────────────────
