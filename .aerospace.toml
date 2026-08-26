@@ -36,11 +36,10 @@ run = 'layout floating'
     # i3: $mod+q
     alt-q = 'close'
 
-    # i3: $mod+d (rofi drun) -> Spotlight. Aerospace can't open Spotlight directly;
-    # synthesize its cmd-space hotkey. Needs AeroSpace in Accessibility perms.
-    alt-d = '''exec-and-forget osascript -e '
-    tell application "System Events" to key code 49 using {command down}'
-    '''
+    # i3: $mod+d (rofi drun) -> Spotlight. Deliberately NOT bound here: Spotlight
+    # itself is moved onto alt-d in .mac-setup.sh. Synthesizing cmd-space from an
+    # alt- binding sends cmd-alt-space (alt is still physically held), which is
+    # macOS's Finder search window, not Spotlight.
 
     # i3: $mod+Shift+Escape (blur-lock)
     alt-shift-esc = '''exec-and-forget osascript -e '

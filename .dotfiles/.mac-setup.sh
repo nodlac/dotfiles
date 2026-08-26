@@ -287,18 +287,16 @@ set_macos_defaults() {
 
     echo "  Key repeat set (fast)"
 
-    disable_hotkey_collisions
+    setup_macos_hotkeys
 
     echo "  NOTE: Set Caps Lock -> Escape in System Settings > Keyboard > Modifier Keys"
 }
 
 # ───────────────────────────────────────────
-# macOS hotkeys that collide with i3-parity bindings
+# macOS hotkeys, tuned for the i3-parity bindings in ~/.aerospace.toml
 # ───────────────────────────────────────────
-# Only the ones that actually steal a key we bind. Spotlight (64) is left ON
-# because aerospace's alt-d synthesizes cmd-space to reach it.
-disable_hotkey_collisions() {
-    echo "=== Disabling colliding macOS hotkeys ==="
+setup_macos_hotkeys() {
+    echo "=== Adjusting macOS hotkeys ==="
 
     # 60/61: select previous/next input source. Eats ctrl-space = tmux prefix.
     # 164: Dictation. Fires on a double-tap of ctrl, which tmux prefix does constantly.
@@ -307,11 +305,19 @@ disable_hotkey_collisions() {
             -dict-add "$id" '<dict><key>enabled</key><false/></dict>'
     done
 
-    # Reload the hotkey daemon so the changes take without a logout.
+    # 64: Spotlight, moved from cmd-space to alt-d to match i3's $mod+d (rofi drun).
+    # Bound here rather than in aerospace because aerospace can only run commands,
+    # and synthesizing cmd-space from an alt- binding sends cmd-alt-space (alt is
+    # still physically held) = Finder search window.
+    # Params are ASCII, virtual key code, modifier mask: 'd', kVK_ANSI_D, optionKey.
+    defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 64 \
+        '<dict><key>enabled</key><true/><key>value</key><dict><key>parameters</key><array><integer>100</integer><integer>2</integer><integer>524288</integer></array><key>type</key><string>standard</string></dict></dict>'
+
     /System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings -u 2>/dev/null || true
 
     echo "  Disabled: input-source switching (ctrl-space), Dictation (double-ctrl)"
-    echo "  Kept: Spotlight cmd-space (aerospace alt-d depends on it)"
+    echo "  Spotlight moved to alt-d (was cmd-space)"
+    echo "  NOTE: Spotlight rebind may need a logout to take effect"
 }
 
 # ───────────────────────────────────────────
