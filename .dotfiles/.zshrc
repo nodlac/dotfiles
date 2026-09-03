@@ -34,7 +34,7 @@ alias df='git --git-dir=$HOME/.dotfiles/ --work-tree=$HOME'
 alias df-quick-commit='df add --update && df status && df commit && df push'
 alias git diff="git diff --color-words"
 alias tmux-start='tmux new-session -A -s notes'
-alias tmux='tmux new-session -A -s settings'
+alias settings='tmux new-session -A -s settings'
 alias eos-setup='~/.dotfiles/.eos-setup.sh'
 alias mac-setup='~/.dotfiles/.mac-setup.sh'
 
