@@ -8,7 +8,7 @@ enable-normalization-flatten-containers = false
 enable-normalization-opposite-orientation-for-nested-containers = false
 
 # Start AeroSpace at login
-start-at-login = false
+start-at-login = true
 
 # Mouse follows focus when focused monitor changes
 on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
@@ -56,11 +56,10 @@ run = 'layout floating'
     alt-k = 'focus --boundaries-action wrap-around-the-workspace up'
     alt-l = 'focus --boundaries-action wrap-around-the-workspace right'
 
-    # i3: $mod+Left/Down/Up/Right
-    alt-left  = 'focus --boundaries-action wrap-around-the-workspace left'
+    # i3: $mod+Down/Up. Left/Right deliberately unbound — alt-h/alt-l cover
+    # horizontal focus, and grabbing alt-arrow starves terminal word-jump.
     alt-down  = 'focus --boundaries-action wrap-around-the-workspace down'
     alt-up    = 'focus --boundaries-action wrap-around-the-workspace up'
-    alt-right = 'focus --boundaries-action wrap-around-the-workspace right'
 
     # i3 wraps focus by default
     ctrl-shift-h =         'focus --boundaries-action wrap-around-the-workspace left'
