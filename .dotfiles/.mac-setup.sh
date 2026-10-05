@@ -85,6 +85,7 @@ install_brew_casks() {
     CASKS=(
         ghostty
         aerospace
+        karabiner-elements
         brave-browser
         slack
         figma
@@ -346,6 +347,10 @@ main() {
     echo "  2. Set Caps Lock -> Escape in System Settings > Keyboard > Modifier Keys"
     echo "  3. Start aerospace: open -a AeroSpace"
     echo "  4. tmux: prefix + I to install plugins (Ctrl-Space + I)"
+    # karabiner.json is owned by the app and rewritten on launch, so the rule
+    # ships as an asset and has to be switched on by hand.
+    echo "  5. Karabiner: launch it, approve the driver extension + Input Monitoring,"
+    echo "     then Complex Modifications > Add predefined rule > 'Linux-style Ctrl'"
 }
 
 main "$@"
