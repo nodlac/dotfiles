@@ -127,6 +127,11 @@ bindkey "^[[B" history-substring-search-down
 bindkey -M vicmd 'k' history-substring-search-up
 bindkey -M vicmd 'j' history-substring-search-down
 
+# Word jump is ctrl+arrow, not option+arrow: aerospace owns alt-left/right for
+# window focus (i3 $mod+arrow parity), so option+arrow never reaches the terminal.
+bindkey "^[[1;5D" backward-word
+bindkey "^[[1;5C" forward-word
+
 # ===========================================
 # History
 # ===========================================
