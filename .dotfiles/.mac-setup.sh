@@ -310,8 +310,6 @@ set_macos_defaults() {
     echo "  Key repeat set (fast)"
 
     setup_macos_hotkeys
-
-    echo "  NOTE: Set Caps Lock -> Escape in System Settings > Keyboard > Modifier Keys"
 }
 
 # ───────────────────────────────────────────
@@ -373,9 +371,13 @@ for p in d.get("profiles", []):
         cur = p.setdefault("complex_modifications", {}).setdefault("rules", [])
         have = {r.get("description") for r in cur}
         cur.extend(r for r in rules if r.get("description") not in have)
+        sm = p.setdefault("simple_modifications", [])
+        if not any(m.get("from", {}).get("key_code") == "caps_lock" for m in sm):
+            sm.append({"from": {"key_code": "caps_lock"},
+                       "to": [{"key_code": "escape"}]})
 json.dump(d, open(cfg, "w"), indent=4, ensure_ascii=False)
 PYEOF
-    echo "  rule enabled"
+    echo "  rule enabled + caps lock mapped to escape"
 }
 
 # ───────────────────────────────────────────
@@ -402,10 +404,9 @@ main() {
     echo ""
     echo "Next steps:"
     echo "  1. Restart shell or: source ~/.zshrc"
-    echo "  2. Set Caps Lock -> Escape in System Settings > Keyboard > Modifier Keys"
-    echo "  3. Start aerospace: open -a AeroSpace"
-    echo "  4. tmux: prefix + I to install plugins (Ctrl-Space + I)"
-    echo "  5. Karabiner: approve the driver extension (System Settings > General >"
+    echo "  2. tmux: prefix + I to install plugins (Ctrl-Space + I)"
+    echo "  3. Copy ~/.env.template to ~/.env and set MACHINE_ENV (work/personal)"
+    echo "  4. Karabiner: approve the driver extension (System Settings > General >"
     echo "     Login Items & Extensions > Driver Extensions) + Input Monitoring,"
     echo "     then rerun this script so setup_karabiner can enable the rule"
 }

@@ -312,14 +312,15 @@ enable_services() {
 *
 
 [main]
+capslock = esc
 left-option = left-meta
 right-option = right-meta
 EOF
             echo "  Created /etc/keyd/default.conf"
             sudo systemctl restart keyd 2>/dev/null || true
-            echo "  Option key now works as Meta"
+            echo "  Option key now works as Meta, caps lock as escape"
         else
-            echo "  keyd config already exists"
+            echo "  keyd config already exists — check it has 'capslock = esc'"
         fi
     fi
 }
