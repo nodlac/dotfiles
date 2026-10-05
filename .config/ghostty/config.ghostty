@@ -2,3 +2,7 @@
 
 keybind = ctrl+h=unbind
 keybind = super+enter=unbind
+
+# Linux terminal convention. Plain ctrl+c stays SIGINT.
+keybind = ctrl+shift+c=copy_to_clipboard
+keybind = ctrl+shift+v=paste_from_clipboard
