@@ -12,7 +12,7 @@ echo ""
 # Dotfiles git repo config
 # ───────────────────────────────────────────
 init_dotfiles_repo() {
-    if [ -d "$DOTFILES_DIR/.git" ]; then
+    if git --git-dir="$DOTFILES_DIR" rev-parse --git-dir &>/dev/null; then
         CURRENT_WORKTREE=$(git --git-dir="$DOTFILES_DIR" config core.worktree 2>/dev/null || true)
         CURRENT_BARE=$(git --git-dir="$DOTFILES_DIR" config core.bare 2>/dev/null || true)
 
@@ -70,9 +70,28 @@ install_brew_packages() {
         vault
         telnet
         valkey
+        glab
+        mkcert
+        pandoc
+        poppler
+        typst
+        unar
+        watch
+        tlrc
+        colima
+        docker
+
+        # Android
+        scrcpy
+
+        # AI
+        ollama
+        llmfit
+        whisper.cpp
 
         # Media
         ffmpeg
+        yt-dlp
     )
 
     brew install "${FORMULAE[@]}" 2>/dev/null || true
@@ -94,10 +113,12 @@ install_brew_casks() {
         kdenlive
         inkscape
         gimp
-        colima
-        docker
         local
         google-drive
+        android-commandlinetools
+        temurin@17
+        maestro
+        ngrok
     )
 
     brew install --cask "${CASKS[@]}" 2>/dev/null || true
@@ -249,8 +270,8 @@ install_opencode() {
 # ───────────────────────────────────────────
 setup_tools() {
     echo "=== Running tools/install.sh ==="
-    if [ -f "$DOTFILES_DIR/tools/install.sh" ]; then
-        source "$DOTFILES_DIR/tools/install.sh"
+    if [ -f "$USER_HOME/tools/install.sh" ]; then
+        source "$USER_HOME/tools/install.sh"
     else
         echo "  tools/install.sh not found"
     fi
@@ -322,6 +343,42 @@ setup_macos_hotkeys() {
 }
 
 # ───────────────────────────────────────────
+# Karabiner complex-modification rule
+# ───────────────────────────────────────────
+setup_karabiner() {
+    echo "=== Enabling Karabiner rule ==="
+    CFG="$USER_HOME/.config/karabiner/karabiner.json"
+    ASSET="$USER_HOME/.config/karabiner/assets/complex_modifications/linux-ctrl-swap.json"
+
+    if [ ! -f "$ASSET" ]; then
+        echo "  rule asset missing — did the dotfiles checkout run?"
+        return
+    fi
+
+    # karabiner.json only exists once the app has run once
+    open -a Karabiner-Elements 2>/dev/null || true
+    for _ in $(seq 1 30); do [ -f "$CFG" ] && break; sleep 1; done
+    if [ ! -f "$CFG" ]; then
+        echo "  karabiner.json never appeared — approve the driver extension, then rerun"
+        return
+    fi
+
+    python3 - "$CFG" "$ASSET" <<'PYEOF'
+import json, sys
+cfg, asset = sys.argv[1], sys.argv[2]
+d = json.load(open(cfg))
+rules = json.load(open(asset))["rules"]
+for p in d.get("profiles", []):
+    if p.get("selected"):
+        cur = p.setdefault("complex_modifications", {}).setdefault("rules", [])
+        have = {r.get("description") for r in cur}
+        cur.extend(r for r in rules if r.get("description") not in have)
+json.dump(d, open(cfg, "w"), indent=4, ensure_ascii=False)
+PYEOF
+    echo "  rule enabled"
+}
+
+# ───────────────────────────────────────────
 # Main
 # ───────────────────────────────────────────
 main() {
@@ -338,6 +395,7 @@ main() {
     setup_tools
     setup_agent_tools
     set_macos_defaults
+    setup_karabiner
 
     echo ""
     echo "=== Setup complete! ==="
@@ -347,10 +405,9 @@ main() {
     echo "  2. Set Caps Lock -> Escape in System Settings > Keyboard > Modifier Keys"
     echo "  3. Start aerospace: open -a AeroSpace"
     echo "  4. tmux: prefix + I to install plugins (Ctrl-Space + I)"
-    # karabiner.json is owned by the app and rewritten on launch, so the rule
-    # ships as an asset and has to be switched on by hand.
-    echo "  5. Karabiner: launch it, approve the driver extension + Input Monitoring,"
-    echo "     then Complex Modifications > Add predefined rule > 'Linux-style Ctrl'"
+    echo "  5. Karabiner: approve the driver extension (System Settings > General >"
+    echo "     Login Items & Extensions > Driver Extensions) + Input Monitoring,"
+    echo "     then rerun this script so setup_karabiner can enable the rule"
 }
 
 main "$@"

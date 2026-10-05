@@ -13,7 +13,7 @@ init_dotfiles_repo() {
     USER_HOME=$(get_user_home)
     DOTFILES_DIR="$USER_HOME/.dotfiles"
     
-    if [ -d "$DOTFILES_DIR/.git" ]; then
+    if git --git-dir="$DOTFILES_DIR" rev-parse --git-dir &>/dev/null; then
         CURRENT_WORKTREE=$(git --git-dir="$DOTFILES_DIR" config core.worktree 2>/dev/null || true)
         CURRENT_BARE=$(git --git-dir="$DOTFILES_DIR" config core.bare 2>/dev/null || true)
         
@@ -174,21 +174,31 @@ setup_zsh_plugins() {
     USER_HOME=$(get_user_home)
     
     mkdir -p "$USER_HOME/.zsh"
-    
-    if [ ! -d "$USER_HOME/.zsh/zsh-history-substring-search" ]; then
-        echo "  Cloning zsh-history-substring-search..."
-        git clone https://github.com/zsh-users/zsh-history-substring-search "$USER_HOME/.zsh/zsh-history-substring-search"
-    else
-        echo "  zsh-history-substring-search already cloned"
-    fi
+
+    declare -A ZSH_PLUGINS=(
+        [zsh-history-substring-search]="https://github.com/zsh-users/zsh-history-substring-search"
+        [zsh-autosuggestions]="https://github.com/zsh-users/zsh-autosuggestions"
+        [zsh-completions]="https://github.com/zsh-users/zsh-completions"
+        [fast-syntax-highlighting]="https://github.com/zdharma-continuum/fast-syntax-highlighting"
+        [fzf-tab]="https://github.com/Aloxaf/fzf-tab"
+    )
+
+    for plugin in "${!ZSH_PLUGINS[@]}"; do
+        if [ -d "$USER_HOME/.zsh/$plugin" ]; then
+            echo "  $plugin already installed"
+        else
+            echo "  Cloning $plugin..."
+            git clone --depth 1 "${ZSH_PLUGINS[$plugin]}" "$USER_HOME/.zsh/$plugin"
+        fi
+    done
 }
 
 setup_tools() {
     echo "=== Running tools/install.sh ==="
     USER_HOME=$(get_user_home)
 
-    if [ -f "$USER_HOME/.dotfiles/tools/install.sh" ]; then
-        source "$USER_HOME/.dotfiles/tools/install.sh"
+    if [ -f "$USER_HOME/tools/install.sh" ]; then
+        source "$USER_HOME/tools/install.sh"
     else
         echo "  tools/install.sh not found"
     fi
@@ -392,7 +402,7 @@ setup_dotfiles() {
     USER_HOME=$(get_user_home)
     
     DOTFILES_DIR="$USER_HOME/.dotfiles"
-    if [ -d "$DOTFILES_DIR/.git" ]; then
+    if git --git-dir="$DOTFILES_DIR" rev-parse --git-dir &>/dev/null; then
         git --git-dir="$DOTFILES_DIR" config core.bare false
         git --git-dir="$DOTFILES_DIR" config core.worktree "$USER_HOME"
         git --git-dir="$DOTFILES_DIR" config status.showUntrackedFiles no
