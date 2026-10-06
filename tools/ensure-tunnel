@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Ensure an SSH tunnel is open for a given db, reopen via evaql if not.
 # Usage: ensure-tunnel <db>
-#   db: bim, finn, bim_stag, finn_stag
+#   db: bim, finn, bim_stag, finn_stag, zendesk
 # Exit 0 if tunnel is up, 1 on failure.
 
 set -euo pipefail
@@ -9,7 +9,7 @@ set -euo pipefail
 db="${1:-}"
 if [[ -z "$db" ]]; then
     echo "Usage: ensure-tunnel <db>" >&2
-    echo "  db: bim, finn, bim_stag, finn_stag" >&2
+    echo "  db: bim, finn, bim_stag, finn_stag, zendesk" >&2
     exit 1
 fi
 
@@ -18,6 +18,8 @@ case "$db" in
     finn|finn_prod)     port=24603; domain=finnegan;  env=production ;;
     bim_stag)           port=24602; domain=bim;      env=staging ;;
     finn_stag)          port=24604; domain=finnegan;  env=staging ;;
+    # Reached via ngrok, not evaql — nothing to open.
+    zendesk)            exit 0 ;;
     *) echo "Unknown db: $db" >&2; exit 1 ;;
 esac
 

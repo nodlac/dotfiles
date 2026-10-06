@@ -7,12 +7,21 @@ return {
     },
     init = function()
       -- These must be set BEFORE dadbod-ui plugin/db_ui.vim sources
-      vim.g.dbs = {
-        { name = 'bim_prod', url = os.getenv 'BIM_URL' },
-        { name = 'finn_prod', url = os.getenv 'FINN_URL' },
-        { name = 'bim_stag', url = os.getenv 'BIM_STAGING_URL' },
-        { name = 'finn_stag', url = os.getenv 'FINN_STAGING_URL' },
-      }
+      -- Unset env var → nil url → Lua drops the key → DBUI dies with E716 "url". Skip those.
+      local dbs = {}
+      for _, db in ipairs {
+        { 'bim_prod', 'BIM_URL' },
+        { 'finn_prod', 'FINN_URL' },
+        { 'bim_stag', 'BIM_STAGING_URL' },
+        { 'finn_stag', 'FINN_STAGING_URL' },
+        { 'zendesk', 'ZENDESK_POSTGRES_URL' },
+      } do
+        local url = os.getenv(db[2])
+        if url and url ~= '' then
+          table.insert(dbs, { name = db[1], url = url })
+        end
+      end
+      vim.g.dbs = dbs
 
       vim.g.db_ui_save_location = vim.fn.expand '~/scripts'
       vim.g.db_ui_tmp_query_location = vim.fn.expand '~/scripts/queries'
@@ -24,7 +33,7 @@ return {
     end,
     config = function()
       -- DB names used in DBUI drawer (maps to ensure-tunnel script names)
-      local db_names = { 'bim_prod', 'bim_stag', 'finn_prod', 'finn_stag' }
+      local db_names = { 'bim_prod', 'bim_stag', 'finn_prod', 'finn_stag', 'zendesk' }
 
       local function ensure_tunnel(db_name)
         vim.notify('Checking SSH tunnel for ' .. db_name .. '...', vim.log.levels.INFO)
