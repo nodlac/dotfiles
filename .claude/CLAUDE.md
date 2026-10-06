@@ -55,6 +55,7 @@ Auto-detects tmux session, updates csv + log.
 | `done` | Fully complete |
 | `review` | Needs human eyes — stuck, decision needed, or done-but-needs-verify |
 | `qa` | Passed user review, now with QA team. User assigns — agents don't self-assign |
+| `deploy` | Passed QA, ready to deploy/merge. User assigns — agents don't self-assign |
 | `hold` | Started, parked on purpose, user coming back to it |
 | `blocked` | External dep blocks (other proj, infra, creds, person) |
 
