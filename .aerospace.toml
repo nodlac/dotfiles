@@ -89,7 +89,6 @@ run = 'layout floating'
 
     # alt-s = 'layout v_accordion' # 'layout stacking' in i3
     alt-w = 'layout h_accordion' # 'layout tabbed' in i3
-    alt-e = 'layout tiles horizontal vertical' # 'layout toggle split' in i3
 
     alt-shift-space = 'layout floating tiling' # 'floating toggle' in i3
 
@@ -132,7 +131,7 @@ run = 'layout floating'
     alt-p = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-hoover || tmux new-session -d -s v-hoover && tmux switch-client -t v-hoover)']
     alt-c = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-control-center || tmux new-session -d -s v-control-center && tmux switch-client -t v-control-center)']
     alt-n = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t notes || tmux new-session -d -s notes && tmux switch-client -t notes)']
-    alt-shift-d = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-psql || tmux new-session -d -s v-psql && tmux switch-client -t v-psql)']
+    alt-e = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-psql || tmux new-session -d -s v-psql && tmux switch-client -t v-psql)']
     alt-t = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t tunnels || tmux new-session -d -s tunnels && tmux switch-client -t tunnels)']
     alt-a = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t agents || tmux new-session -d -s agents && tmux switch-client -t agents)']
 
