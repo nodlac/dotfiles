@@ -255,7 +255,7 @@ vidangel-start-backend() {
 
     echo ""
     echo "[4/4] Dev server"
-    vidangel-run-devserver
+    vidangel-run-devserver "$@"
 }
 
 vidangel-reset-server() {
@@ -394,13 +394,37 @@ _va_devserver_env() {
     export PYTHONUNBUFFERED=1
 }
 
+# Plain HTTP by default. Pass --secure (or set VA_SECURE=1) for TLS.
+#
+# HTTP is the default because the iOS/tvOS sims hardcode http://127.0.0.1:8000
+# for the `local` environment, and because serving TLS on a *.vidangel.com host
+# makes Django emit HSTS (base.py: max-age=3600, includeSubDomains), which pins
+# that hostname to HTTPS in the browser for an hour afterwards.
 _va_runserver() {
-    local certs="$HOME/vidangel-repo/vidangel-backend/server/certs"
-    if [[ ! -f "$certs/localhost.pem" || ! -f "$certs/localhost-key.pem" ]]; then
-        echo "  No HTTPS certs found. Generating via server/gen-certs.sh..."
-        "$HOME/vidangel-repo/vidangel-backend/server/gen-certs.sh" || return 1
+    local secure=""
+    [[ -n "$VA_SECURE" ]] && secure=1
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --secure)   secure=1 ;;
+            --insecure) secure="" ;;
+        esac
+        shift
+    done
+
+    local -a tls_args
+    if [[ -n "$secure" ]]; then
+        local certs="$HOME/vidangel-repo/vidangel-backend/server/certs"
+        if [[ ! -f "$certs/localhost.pem" || ! -f "$certs/localhost-key.pem" ]]; then
+            echo "  No HTTPS certs found. Generating via server/gen-certs.sh..."
+            "$HOME/vidangel-repo/vidangel-backend/server/gen-certs.sh" || return 1
+        fi
+        tls_args=(--cert-file "$certs/localhost.pem" --key-file "$certs/localhost-key.pem")
+        echo "  Serving HTTPS on :8000"
+    else
+        echo "  Serving HTTP on :8000 (pass --secure for TLS)"
     fi
-    python3 manage.py runserver_debug --cert-file "$certs/localhost.pem" --key-file "$certs/localhost-key.pem" --skip-checks --skip-migration-checks --print-sql-location --reloader-type=watchdog
+
+    python3 manage.py runserver_debug "${tls_args[@]}" --skip-checks --skip-migration-checks --print-sql-location --reloader-type=watchdog
 }
 
 # Resolve the backend checkout for the current shell (worktree-aware): walk up
@@ -429,7 +453,7 @@ vidangel-run-devserver() {
     fi
     source .venv/bin/activate
     _va_devserver_env
-    _va_runserver
+    _va_runserver "$@"
 }
 
 # Interactive worktree picker: list every backend worktree, pick one, switch.
