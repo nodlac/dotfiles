@@ -23,6 +23,8 @@ init_dotfiles_repo() {
             git --git-dir="$DOTFILES_DIR" config status.showUntrackedFiles no
             echo "  Configured: bare=false, worktree=$USER_HOME, untracked=hidden"
         fi
+        # df-test runs on every commit. tools/git-hooks is tracked; $DOTFILES_DIR/hooks is not.
+        git --git-dir="$DOTFILES_DIR" config core.hooksPath "$USER_HOME/tools/git-hooks"
     fi
 }
 

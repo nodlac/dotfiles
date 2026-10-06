@@ -32,6 +32,7 @@ alias ls='ls --color=auto'
 alias grep='grep --color=auto'
 alias df='git --git-dir=$HOME/.dotfiles/ --work-tree=$HOME'
 alias df-quick-commit='df add --update && df status && df commit && df push'
+alias df-test='~/.dotfiles/test.sh'
 alias git diff="git diff --color-words"
 alias tmux-start='tmux new-session -A -s notes'
 alias settings='tmux new-session -A -s settings'
