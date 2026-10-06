@@ -158,6 +158,21 @@ vim.api.nvim_create_user_command('SprintPull', function()
   vim.cmd('SprintSync pull')
 end, { desc = 'Pull-only sprint-sync (no writes to ClickUp)' })
 
+vim.api.nvim_create_user_command('TaskCheck', function(opts)
+  local cmd = vim.list_extend({ vim.fn.expand('~/tools/merged-tasks') }, opts.fargs)
+  local buf, _ = open_float('merged-tasks')
+  vim.fn.jobstart(cmd, {
+    stdout_buffered = true,
+    stderr_buffered = true,
+    on_stdout = function(_, data) vim.schedule(function() append(buf, data) end) end,
+    on_stderr = function(_, data) vim.schedule(function() append(buf, data) end) end,
+  })
+end, {
+  nargs = '*',
+  complete = function() return { '--no-fetch', '--days' } end,
+  desc = 'Open sprint tasks whose TECH id is merged to main',
+})
+
 vim.api.nvim_create_user_command('SprintSyncLog', function()
   if last_buf and vim.api.nvim_buf_is_valid(last_buf) then
     local w = math.floor(vim.o.columns * 0.8)
@@ -179,6 +194,41 @@ end, { desc = 'Reopen last sprint-sync log' })
 vim.api.nvim_create_autocmd({ 'FocusGained', 'BufEnter', 'CursorHold' }, {
   pattern = '*/sprints/sprint_*.md',
   callback = function() vim.cmd('checktime') end,
+})
+
+-- <leader>ar: jump to the agent working the task under the cursor (cursor can
+-- sit on any of its note lines) and kick off the review walkthrough there.
+local function task_id_at_cursor()
+  local row = vim.fn.line('.')
+  local min_indent = math.huge
+  for l = row, 1, -1 do
+    local line = vim.fn.getline(l)
+    if line:match('^#') then return nil end
+    local indent = #line:match('^%s*')
+    if line:match('%S') and indent < min_indent then
+      min_indent = indent
+      local id = line:match('^%s*%- %[[^%]]+%]%s+%[?(TECH%-%d+)')
+      if id then return id end
+    end
+  end
+end
+
+vim.api.nvim_create_autocmd('BufEnter', {
+  pattern = '*/sprints/sprint_*.md',
+  callback = function(ev)
+    vim.keymap.set('n', '<leader>ar', function()
+      local id = task_id_at_cursor()
+      if not id then return vim.notify('no TECH task under cursor', vim.log.levels.WARN) end
+      local out = {}
+      vim.fn.jobstart({ 'zsh', '-c', 'source ~/repos/agent-tools/agent-tools.sh >/dev/null 2>&1; agent-review "$1"', '_', id }, {
+        stdout_buffered = true,
+        on_stdout = function(_, data) out = data end,
+        on_exit = function(_, code)
+          if code ~= 0 then vim.notify(table.concat(out, '\n'), vim.log.levels.WARN) end
+        end,
+      })
+    end, { buffer = ev.buf, desc = 'Agent review walkthrough for task under cursor' })
+  end,
 })
 
 return M
