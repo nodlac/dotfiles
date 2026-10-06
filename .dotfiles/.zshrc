@@ -165,3 +165,4 @@ zstyle ':completion:*:descriptions' format '%B%d%b'
 if [[ "$MACHINE_ENV" == "work" ]]; then
   source ~/.zsh/.vidangel.zsh
 fi
+export PATH=$PATH:$HOME/.maestro/bin
