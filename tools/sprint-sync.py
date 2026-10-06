@@ -117,6 +117,13 @@ SPRINT_FILE = os.path.join(SPRINT_DIR, "sprint_tracker.md")
 CLICKUP_BASE = f"https://app.clickup.com/t/{TEAM_ID}"
 DRY_RUN = "--dry-run" in sys.argv
 PULL_ONLY = "--pull-only" in sys.argv or (len(sys.argv) > 1 and sys.argv[1] == "pull")
+# Repair escape hatch: local indent wins over ClickUp's parent field for one
+# run. Needed when bad nesting has already been pushed, since PULL PARENTS
+# runs first and would otherwise re-import it before PUSH PARENTS can fix it.
+PUSH_NESTING_ONLY = "--push-nesting" in sys.argv
+# Nesting an existing task is one-way (see sync_push_parents), so it is always
+# confirmed. This blanket-approves it for runs with no tty, eg nvim jobstart.
+APPROVE_NESTING = "--approve-nesting" in sys.argv
 VERBOSE = "--verbose" in sys.argv or "-v" in sys.argv
 
 # ── User-facing logger ────────────────────────────────────────────────────
@@ -561,10 +568,89 @@ def get_clickup_tasks(list_id):
     return tasks
 
 
+LIST_INDENT_RE = re.compile(r"^( +)(?=- )")
+
+
+def resolve_indents(lines, ask=None):
+    """Put every list line on the 4-space grid, asking about ambiguous ones.
+
+    Nesting is derived from indentation (_derive_local_parents), so an
+    off-grid 3- or 7-space line silently reads as a child of the line above
+    and gets pushed to ClickUp as a real subtask. That new parent then feeds
+    expected_indent = parent_indent + 4, so the drift compounds every sync.
+
+    The legal homes for an off-grid line are top level, alongside any open
+    ancestor, or one level under the line above — a plain round-to-nearest
+    guesses wrong whenever the line sits shallower than the line above it.
+    Only the author knows which was meant, so ask.
+    ask(text, options, default) -> chosen indent, where options is a list of
+    (indent, parent_text_or_None); default asks on stdin.
+    """
+    if ask is None:
+        ask = _ask_nesting
+    out, fixed = [], []
+    stack = []  # (indent, text) of currently open ancestors, on-grid only
+    for i, line in enumerate(lines):
+        if SECTION_HEADER.match(line):
+            stack = []
+            out.append(line)
+            continue
+        m = LIST_INDENT_RE.match(line)
+        if not m:
+            out.append(line)
+            continue
+        indent = len(m.group(1))
+        if indent % 4:
+            options = [(4, None)]
+            for lvl, text in stack:
+                if lvl >= 4:
+                    options.append((lvl + 4, text))
+            options = sorted({lvl: p for lvl, p in options}.items())
+            legal = [lvl for lvl, _ in options]
+            guess = min(legal, key=lambda lvl: (abs(lvl - indent), lvl))
+            indent = ask(line.strip(), options, guess) if len(options) > 1 else guess
+            line = " " * indent + line.lstrip(" ")
+            fixed.append((i + 1, indent, line.strip()))
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        stack.append((indent, line.strip()))
+        out.append(line)
+    return out, fixed
+
+
+def _ask_nesting(text, options, default):
+    print(f"\n  Off-grid indent: {text[:100]}")
+    for n, (indent, parent) in enumerate(options, 1):
+        where = f"under {parent[:70]}" if parent else "top level"
+        mark = "  (default)" if indent == default else ""
+        print(f"    {n}) indent {indent:<3} {where}{mark}")
+    pick = [i for i, (lvl, _) in enumerate(options, 1) if lvl == default][0]
+    answer = input(f"  Choose [{pick}]: ").strip()
+    if answer.isdigit() and 1 <= int(answer) <= len(options):
+        return options[int(answer) - 1][0]
+    return default
+
+
 def parse_sprint_file(filepath):
     """Parse sprint file and return dict of TECH ID -> (line_num, marker, title)."""
     with open(filepath, "r") as f:
         lines = f.readlines()
+    # No tty under nvim's jobstart (no pty), so there is nobody to answer the
+    # prompt. Take the nearest legal level and print what was chosen — leaving
+    # the line off-grid is what feeds the accidental-nesting loop.
+    interactive = sys.stdin.isatty()
+    ask = None if interactive else (lambda text, options, default: default)
+    resolved, fixed = resolve_indents(lines, ask=ask)
+    if fixed:
+        for line_no, indent, text in fixed:
+            how = "chose" if interactive else "auto"
+            print(f"  indent {how}: line {line_no} -> {indent}  {text[:80]}")
+        if DRY_RUN:
+            print(f"  [dry-run] Would fix indent on {len(fixed)} line(s).")
+        else:
+            atomic_write(filepath, resolved)
+            print(f"  Fixed indent on {len(fixed)} line(s).")
+            lines = resolved
     return parse_sprint_file_lines(lines)
 
 
@@ -578,6 +664,12 @@ def parse_sprint_file_lines(lines):
         m = TASK_LINE_PATTERN.match(line)
         if m:
             tech_id = m.group(3) or m.group(4)
+            # A task can appear twice (live section + an archive copy left by
+            # move_done_to_section). First occurrence is the live one; letting
+            # the archive copy win means status and nesting get read off a
+            # stale, deeply-indented line.
+            if tech_id in tasks:
+                continue
             marker = f"[{m.group(2)}]"
             title = m.group(5).strip()
             target_sprint = None
@@ -766,6 +858,7 @@ EXCLUDED_PLACEMENT_HEADINGS = {
     "# Uncategorized Tasks",  # legacy
     "# Done",
     "# Future Projects",
+    "# Agent Work",  # temporary home while an auto agent owns the task
 }
 
 
@@ -1191,7 +1284,14 @@ def sync_pull(filepath, clickup_tasks, local_tasks, lines, placements=None):
             local_indent = _get_task_indent(lines, local["line"])
             cu_parent_tech = id_to_tech.get(parent_id) if parent_id else None
 
-            if cu_parent_tech and cu_parent_tech in local_tasks:
+            # Archive sections keep their layout: never re-nest a line there to
+            # match ClickUp. The API cannot un-nest, so a stale parent on an
+            # archived task would otherwise re-indent it on every single run.
+            _, _skip_at = _section_map(lines)
+            if _skip_at.get(local["line"]):
+                continue
+
+            if cu_parent_tech and cu_parent_tech in local_tasks and not PUSH_NESTING_ONLY:
                 # Should be nested under parent
                 parent_indent = _get_task_indent(lines, local_tasks[cu_parent_tech]["line"])
                 expected_indent = parent_indent + 4
@@ -1620,19 +1720,56 @@ def sync_push(local_tasks, clickup_tasks, current_sprint_num=None, list_id=None)
     return done_tech_ids, deleted_tech_nums, pushed_next_tech_nums, push_target_map, file_to_section_map, failed_move_tech_nums
 
 
-def _derive_local_parents(local_tasks):
+# Sections that hold archived or unsorted copies. Their indentation is
+# leftover layout, not hierarchy, so nesting is never derived from them.
+NO_NEST_SECTIONS = ("done", "drifted", "failed to move", "uncategorized tasks")
+
+
+def _section_map(lines):
+    """Return (section_at, skip_at): per line index, the heading line it falls
+    under and whether that heading is an archive section.
+
+    A heading resets nesting, and archive sections are excluded from it
+    entirely — their indentation is leftover layout, not hierarchy. Without
+    this, move_done_to_section's indent ladder in # Done reads as a parent
+    chain in both directions: pushed to ClickUp, then pulled back as real
+    nesting on the next run.
+    """
+    section_at, skip_at = {}, {}
+    current, skipped = None, False
+    for i, line in enumerate(lines):
+        hm = SECTION_HEADER.match(line)
+        if hm:
+            current = i
+            skipped = hm.group(2).strip().lower() in NO_NEST_SECTIONS
+        section_at[i] = current
+        skip_at[i] = skipped
+    return section_at, skip_at
+
+
+def _derive_local_parents(local_tasks, lines):
     """Derive parent relationships from indentation in local sprint file.
 
     Returns dict of tech_num -> parent_tech_num (or None for top-level tasks).
-    A task's parent is the nearest preceding task with strictly lower indent.
+    A task's parent is the nearest preceding task with strictly lower indent,
+    within the same section.
     """
+    section_at, skip_at = _section_map(lines)
+
     # Sort tasks by line number to walk in file order
     sorted_tasks = sorted(local_tasks.items(), key=lambda x: x[1]["line"])
     parents = {}
     # Stack of (tech_num, indent) — ancestors in current nesting
     stack = []
+    current_section = object()
 
     for tech_num, info in sorted_tasks:
+        ln = info["line"]
+        if skip_at.get(ln):
+            continue
+        if section_at.get(ln) != current_section:
+            current_section = section_at.get(ln)
+            stack = []
         indent = info["indent"]
         # Pop stack until we find a task with strictly less indent
         while stack and stack[-1][1] >= indent:
@@ -1643,7 +1780,7 @@ def _derive_local_parents(local_tasks):
     return parents
 
 
-def sync_push_parents(local_tasks, clickup_tasks):
+def sync_push_parents(local_tasks, clickup_tasks, lines):
     """Push local nesting changes to ClickUp.
 
     Compares parent relationships derived from local indentation against
@@ -1661,8 +1798,10 @@ def sync_push_parents(local_tasks, clickup_tasks):
             id_to_tech[task["id"]] = tech_num
             tech_to_id[tech_num] = task["id"]
 
-    local_parents = _derive_local_parents(local_tasks)
+    local_parents = _derive_local_parents(local_tasks, lines)
     pushed = 0
+    needs_manual = []
+    declined = []
 
     for tech_num, local_parent_tech in local_parents.items():
         # Skip tasks marked for deletion
@@ -1686,14 +1825,39 @@ def sync_push_parents(local_tasks, clickup_tasks):
             print(f"  SKIP TECH-{tech_num}: local parent TECH-{local_parent_tech} not in ClickUp")
             continue
 
-        new_parent_id = tech_to_id[local_parent_tech] if local_parent_tech else None
-        direction = (
-            f"nest under TECH-{local_parent_tech}" if local_parent_tech
-            else "un-nest to top level"
-        )
+        # Documented one-way street: "You can move a subtask to another parent
+        # task by including "parent" with a valid task id. You cannot convert a
+        # subtask to a task by setting "parent" to null."
+        # https://developer.clickup.com/reference/updatetask
+        # null (and "", 0, false, own-id) all return 200 and change nothing, so
+        # sending it just reports a success that never happened — and since
+        # nesting can then only ever be added, accidents accumulate forever.
+        if not local_parent_tech:
+            needs_manual.append((tech_num, cu_parent_tech, cu_task.get("url")))
+            continue
+
+        new_parent_id = tech_to_id[local_parent_tech]
+        direction = f"nest under TECH-{local_parent_tech}"
+
+        # Nesting an existing task is effectively permanent — only the UI can
+        # undo it — so it is never done on indentation alone. Subtasks created
+        # by sync_create_subtasks are exempt: they are born nested, have no
+        # history to lose, and are cheap to delete and remake.
+        if not DRY_RUN and not APPROVE_NESTING:
+            title = local_tasks[tech_num]["title"][:60]
+            parent_title = local_tasks.get(local_parent_tech, {}).get("title", "")[:60]
+            if not sys.stdin.isatty():
+                declined.append((tech_num, title, local_parent_tech, parent_title))
+                continue
+            print(f"\n  Nest  TECH-{tech_num} {title}")
+            print(f"  under TECH-{local_parent_tech} {parent_title}")
+            print("  Only the ClickUp UI can undo this.")
+            if not input("  Approve? [y/N] ").strip().lower().startswith("y"):
+                print(f"  TECH-{tech_num}: left as is")
+                continue
 
         if DRY_RUN:
-            print(f"  [dry-run] TECH-{tech_num}: would {direction}")
+            print(f"  [dry-run] TECH-{tech_num}: would {direction} (needs approval)")
             pushed += 1
         else:
             result = api("PUT", f"/task/{cu_task['id']}", {"parent": new_parent_id})
@@ -1707,6 +1871,24 @@ def sync_push_parents(local_tasks, clickup_tasks):
         print("  No parent changes to push.")
     else:
         print(f"  Pushed {pushed} parent update(s).")
+
+    if declined:
+        print(f"\n  {len(declined)} nesting change(s) NOT pushed — nesting an existing task "
+              "can only be undone in the ClickUp UI,")
+        print("  and there is no tty here to approve it. Re-run in a terminal, or pass "
+              "--approve-nesting:")
+        for tech_num, title, parent_tech, parent_title in declined:
+            print(f"    TECH-{tech_num} {title}")
+            print(f"      under TECH-{parent_tech} {parent_title}")
+
+    if needs_manual:
+        print(f"\n  {len(needs_manual)} task(s) are top-level locally but subtasks in "
+              "ClickUp. The API cannot un-nest, so PULL PARENTS will keep re-nesting")
+        print("  them here until you fix it in the ClickUp UI "
+              "(open the subtask -> ... menu -> Convert to -> Parent task):")
+        for tech_num, parent_tech, url in needs_manual:
+            print(f"    TECH-{tech_num}  (under TECH-{parent_tech})  "
+                  f"{url or CLICKUP_BASE + '/TECH-' + tech_num}")
 
 
 def delete_testing_checklist(taskid):
@@ -2746,7 +2928,7 @@ def main(target_sprint_num=None):
 
         # Push parent/nesting changes
         out.info("phase.push_parents", "begin")
-        sync_push_parents(local_tasks, clickup_tasks)
+        sync_push_parents(local_tasks, clickup_tasks, lines)
         print()
 
     # Remove [d] lines and lines whose push target sprint has no ClickUp list yet.
@@ -3035,7 +3217,7 @@ def main(target_sprint_num=None):
     # (or sync) put them there deliberately, and promoting them creates a
     # bounce loop with ATTACH STALE on the next run.
     sticky_ranges = []
-    for h in ("# Drifted", "# Failed to Move"):
+    for h in ("# Drifted", "# Failed to Move", "# Agent Work"):
         s, e = _find_section_range(current_lines, h)
         if s is not None:
             sticky_ranges.append((s, e))
@@ -3118,6 +3300,19 @@ def main(target_sprint_num=None):
     if not DRY_RUN:
         atomic_write(filepath, current_lines)
     print()
+
+    # MR status lines (🔀). mr_track syncs GitLab/tardis first and skips any
+    # task whose source failed, so a bad sync never prints stale status.
+    if not DRY_RUN:
+        try:
+            sys.path.insert(0, os.path.expanduser("~/repos/agent-tools"))
+            import mr_track
+            print(f"MR LINES: {mr_track.annotate(filepath)} changed")
+            with open(filepath) as f:
+                current_lines = f.readlines()
+        except Exception as e:
+            print(f"MR LINES: skipped — {e}")
+        print()
 
     # Hold items: surface every sync so parked work gets a deliberate decision.
     cs_s, cs_e = _find_section_range(current_lines, "# Current Sprint")
