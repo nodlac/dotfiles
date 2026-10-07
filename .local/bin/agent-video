@@ -1,0 +1,30 @@
+#!/bin/sh
+# agent-video            — open latest recording
+# agent-video <session>  — open that session's latest recording
+# agent-video ls         — list all recordings by session
+# agent-video browse     — open the videos folder in Finder
+DIR="$HOME/.agents/videos"
+case "$1" in
+  ls)
+    find "$DIR" -name '*.mp4' -not -name latest.mp4 2>/dev/null \
+      | sort | sed "s|$DIR/||" | awk -F/ '{ if ($1 != last) { print "\n" $1 ":"; last = $1 } print "  " $2 }'
+    ;;
+  browse)
+    open "$DIR"
+    ;;
+  "")
+    # scope to the current tmux session's recordings; global latest only outside tmux
+    SESSION=$(tmux display-message -p '#S' 2>/dev/null)
+    if [ -n "$SESSION" ]; then
+      LATEST=$(ls -t "$DIR/$SESSION"/*.mp4 2>/dev/null | head -1)
+      [ -n "$LATEST" ] && exec open "$LATEST"
+      echo "no recordings for session '$SESSION' (agent-video ls to see all)"
+      exit 1
+    fi
+    [ -e "$DIR/latest.mp4" ] && open "$DIR/latest.mp4" || { echo "no recordings yet"; exit 1; }
+    ;;
+  *)
+    LATEST=$(ls -t "$DIR/$1"/*.mp4 2>/dev/null | head -1)
+    [ -n "$LATEST" ] && open "$LATEST" || { echo "no videos for $1"; exit 1; }
+    ;;
+esac

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# agents-restart — resume every Claude agent after a reboot.
+#
+# tmux-continuum restores the agent tmux sessions as bare shells (it only
+# re-launches whitelisted programs, not claude). This walks those restored
+# shells and fires `claude --continue` in each, so every agent picks up its
+# conversation where it left off — transcripts live in ~/.claude/projects,
+# so nothing is lost across a reboot.
+#
+# Agent sessions = tmux sessions named z-* / zz-* (the spawn convention).
+# Idempotent: panes already running claude are skipped, so re-running to
+# catch stragglers is safe.
+#
+# Usage: agents-restart [-n|--dry-run]
+
+set -uo pipefail
+
+pattern='^zz?-'
+resume_cmd='claude --continue'
+dry=0
+[[ "${1:-}" == "-n" || "${1:-}" == "--dry-run" ]] && dry=1
+
+if ! tmux has-session 2>/dev/null; then
+    echo "No tmux server / sessions. Attach tmux first so continuum restores the" >&2
+    echo "agent sessions (prefix + Ctrl-r to force), then re-run agents-restart." >&2
+    exit 1
+fi
+
+started=0
+skipped=0
+while IFS= read -r s; do
+    [[ "$s" =~ $pattern ]] || continue
+    cmd=$(tmux display-message -p -t "$s" '#{pane_current_command}' 2>/dev/null)
+
+    # claude renames its process to its version string, e.g. "2.1.219".
+    if [[ "$cmd" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || "$cmd" == node || "$cmd" == claude ]]; then
+        printf 'skip   %-62s (claude already up: %s)\n' "$s" "$cmd"
+        skipped=$((skipped + 1))
+        continue
+    fi
+
+    # Only launch into an idle shell — never stomp an editor/psql/etc.
+    case "$cmd" in
+        zsh | bash | -zsh | -bash | fish | sh) ;;
+        *)
+            printf 'skip   %-62s (busy: %s)\n' "$s" "$cmd"
+            skipped=$((skipped + 1))
+            continue
+            ;;
+    esac
+
+    if ((dry)); then
+        printf 'DRY    %-62s -> %s\n' "$s" "$resume_cmd"
+    else
+        tmux send-keys -t "$s" C-u                 # clear any stray input
+        tmux send-keys -t "$s" "$resume_cmd" Enter
+        printf 'resume %-62s -> %s\n' "$s" "$resume_cmd"
+    fi
+    started=$((started + 1))
+done < <(tmux list-sessions -F '#{session_name}')
+
+echo "---"
+if ((dry)); then
+    echo "would resume: $started   skipped: $skipped   (dry run — nothing sent)"
+else
+    echo "resumed: $started   skipped: $skipped"
+fi

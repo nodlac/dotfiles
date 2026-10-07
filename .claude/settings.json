@@ -1,0 +1,58 @@
+{
+  "permissions": {
+    "allow": [],
+    "defaultMode": "auto"
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "i=$(cat); echo \"$(echo \"$i\" | bash /Users/medina_station/.claude/plugins/cache/ponytail/ponytail/4.9.0/hooks/ponytail-statusline.sh) $(echo \"$i\" | bash /Users/medina_station/.claude/statusline-context.sh)\""
+  },
+  "enabledPlugins": {
+    "frontend-design@claude-plugins-official": true,
+    "ponytail@ponytail": true,
+    "swift-lsp@claude-plugins-official": true
+  },
+  "extraKnownMarketplaces": {
+    "ponytail": {
+      "source": {
+        "source": "github",
+        "repo": "DietrichGebert/ponytail"
+      }
+    }
+  },
+  "awaySummaryEnabled": false,
+  "skipWorkflowUsageWarning": true,
+  "skipAutoPermissionPrompt": true,
+  "autoMode": {
+    "environment": [
+      "### Org-wide",
+      "**Organization**: VidAngel (from GitLab remote gitlab.com:vidangel/www.vidangel.com.git)",
+      "**Cloud provider(s)**: None configured",
+      "**Repository visibility**: assume private unless the remote host and repo name indicate otherwise, or a visibility check in the transcript shows public — not queryable here (origin is gitlab.com, not github.com; gh check did not run)",
+      "**Internal sharing / snippet hosting**: None configured — treat public paste/gist services as outside the trust boundary",
+      "**Secrets management**: None configured",
+      "**Default / protected branches**: main (default branch, per repo facts); protection status not queryable here (gh check applies to github.com only)",
+      "**CI/CD deploy targets**: None configured",
+      "**Network posture**: None configured",
+      "**Source control**: gitlab.com:vidangel/www.vidangel.com.git (this repo's origin only)",
+      "**Trusted internal domains**: localhost.vidangel.com (dev host for this repo, seen 7× in this project's transcripts and documented in README.md)",
+      "**Trusted cloud buckets**: None configured",
+      "**Key internal services**: None configured",
+      "**Internal package registry**: None configured",
+      "**Sensitive data locations & audiences**: any file or store holding personal data, confidential business data, credentials, regulated data, or similarly sensitive material; preserve exact handles when known and share only with audiences cleared at the [named+specifics] bar; this repo's .gitignore flags .env.local, .env.*.local, and secrets/* as sensitive-pattern paths, and .env.development is present in the tree",
+      "**Data retention / declassification**: None configured",
+      "**Sensitive remote targets**: any namespace, host, or container whose name carries `prod` or `production` as a whole word or name segment (hyphen/underscore/dot-delimited — e.g. matches `prod-db`, not `producer`)",
+      "**Protected deployment namespaces / environments**: None configured — fall back to the Sensitive remote targets heuristic",
+      "**Protected IaC scopes**: IAM, RBAC, networking, quota, and node-pool resources; anything whose name or tag carries `prod` or `production` as a whole word or name segment",
+      "### User-specific",
+      "**Primary use of Claude Code**: software development (VidAngel www.vidangel.com Vue.js web client)",
+      "**Trusted repo**: /Users/medina_station/vidangel-repo/www.vidangel.com-fix-add-vidangel-extension-banner-to-not-cover-navbar-double and its origin remote gitlab.com:vidangel/www.vidangel.com.git",
+      "**Org-specific CLIs**: agent-update (session/task check-in tool, 4× in this project's transcripts, documented in ~/.claude/CLAUDE.md)",
+      "**routine under this repo's working tree**: npm scripts (start, serve, build, preview, test, lint, etc. from package.json) and npx invocations (5× in this project's transcripts) are routine"
+    ]
+  },
+  "idleCompaction": true,
+  "env": {
+    "CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS": "100000"
+  }
+}

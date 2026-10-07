@@ -104,23 +104,7 @@ echo "Setting up Claude Code permissions..."
 CLAUDE_DIR="$HOME/.claude"
 mkdir -p "$CLAUDE_DIR"
 
-SETTINGS_SRC="$SCRIPTS_DIR/claude-settings/settings.json"
 SETTINGS_LOCAL_SRC="$SCRIPTS_DIR/claude-settings/settings.local.json"
-
-CLAUDE_MD_SRC="$SCRIPTS_DIR/claude-settings/CLAUDE.md"
-if [[ -f "$CLAUDE_DIR/CLAUDE.md" ]]; then
-    yellow "  ~/.claude/CLAUDE.md already exists — skipping (delete to override)"
-else
-    cp "$CLAUDE_MD_SRC" "$CLAUDE_DIR/CLAUDE.md"
-    info "copied CLAUDE.md → ~/.claude/CLAUDE.md"
-fi
-
-if [[ -f "$CLAUDE_DIR/settings.json" ]]; then
-    yellow "  ~/.claude/settings.json already exists — skipping (delete to override)"
-else
-    cp "$SETTINGS_SRC" "$CLAUDE_DIR/settings.json"
-    info "copied settings.json → ~/.claude/settings.json"
-fi
 
 if [[ -f "$CLAUDE_DIR/settings.local.json" ]]; then
     yellow "  ~/.claude/settings.local.json already exists — skipping (delete to override)"
