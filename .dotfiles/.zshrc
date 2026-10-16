@@ -11,6 +11,7 @@
 export PATH="$HOME/.local/bin:$PATH"
 export PATH="/opt/homebrew/opt/libpq/bin:$PATH"
 export PATH="$PATH:$(go env GOPATH)/bin"
+export PATH=$PATH:$HOME/.maestro/bin
 
 # Loads Environment variables
 [ -f ~/.env ] && source ~/.env
@@ -160,10 +161,12 @@ zstyle ':completion:*' group-name ''
 zstyle ':completion:*:descriptions' format '%B%d%b'
 
 # ===========================================
-# Work Specific Aliases
+# Maching Specific Zsh
 # ===========================================
-# Load work aliases if on work machine
 if [[ "$MACHINE_ENV" == "work" ]]; then
   source ~/.zsh/.vidangel.zsh
+elif [[ "$MACHINE_ENV" == "nodlac" ]]; then
+  source ~/.zsh/.nodlac.zsh
+else
+  echo "Unknown MACHINE_ENV: '$MACHINE_ENV'"
 fi
-export PATH=$PATH:$HOME/.maestro/bin
