@@ -56,7 +56,7 @@ setup_symlinks() {
 }
 
 load_packages() {
-    CONFIG_FILE="$USER_HOME/.dotfiles/.setup.conf"
+    CONFIG_FILE="$USER_HOME/.dotfiles/.server-setup.conf"
 
     if [ -f "$CONFIG_FILE" ]; then
         echo "  Reading from $CONFIG_FILE" >&2
@@ -84,7 +84,7 @@ DEFAULTS
 }
 
 load_optional_packages() {
-    CONFIG_FILE="$USER_HOME/.dotfiles/.setup.conf"
+    CONFIG_FILE="$USER_HOME/.dotfiles/.server-setup.conf"
     [ -f "$CONFIG_FILE" ] || return 0
     grep -v '^#' "$CONFIG_FILE" | grep -v '^$' | awk '{print $1}' | grep -E '^-' | sed 's/^-//' | sort -u
 }

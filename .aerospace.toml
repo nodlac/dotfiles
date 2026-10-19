@@ -1,0 +1,148 @@
+# Reference: https://github.com/i3/i3/blob/next/etc/config
+
+# i3 doesn't have "normalizations" feature that why we disable them here.
+# But the feature is very helpful.
+# Normalizations eliminate all sorts of weird tree configurations that don't make sense.
+# Give normalizations a chance and enable them back.
+enable-normalization-flatten-containers = false
+enable-normalization-opposite-orientation-for-nested-containers = false
+
+# Start AeroSpace at login
+start-at-login = true
+
+# Mouse follows focus when focused monitor changes
+on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
+
+# Simulator device windows are fixed-aspect-ratio and reject resize. Tiled, they
+# hold a slot they can't fill and squeeze every sibling. Blank-title phantom
+# windows do the same while being invisible.
+[[on-window-detected]]
+if.app-id = 'com.apple.iphonesimulator'
+run = 'layout floating'
+
+# Android emulator + scrcpy report NULL-APP-BUNDLE-ID, so match on app name.
+[[on-window-detected]]
+if.app-name-regex-substring = 'qemu-system'
+run = 'layout floating'
+
+[[on-window-detected]]
+if.app-name-regex-substring = 'scrcpy'
+run = 'layout floating'
+
+[mode.main.binding]
+    # i3: $mod+Return
+    alt-enter = 'exec-and-forget open -na Ghostty'
+
+    # i3: $mod+q
+    alt-q = 'close'
+
+    # i3: $mod+d (rofi drun) -> Spotlight. Deliberately NOT bound here: Spotlight
+    # itself is moved onto alt-d in .mac-setup.sh. Synthesizing cmd-space from an
+    # alt- binding sends cmd-alt-space (alt is still physically held), which is
+    # macOS's Finder search window, not Spotlight.
+
+    # i3: $mod+Shift+Escape (blur-lock)
+    alt-shift-esc = '''exec-and-forget osascript -e '
+    tell application "System Events" to keystroke "q" using {command down, control down}'
+    '''
+
+    # i3: $mod+Tab / $mod+Shift+Tab
+    alt-tab = 'workspace next'
+    alt-shift-tab = 'workspace prev'
+
+    # i3: $mod+h/j/k/l
+    alt-h = 'focus --boundaries-action wrap-around-the-workspace left'
+    alt-j = 'focus --boundaries-action wrap-around-the-workspace down'
+    alt-k = 'focus --boundaries-action wrap-around-the-workspace up'
+    alt-l = 'focus --boundaries-action wrap-around-the-workspace right'
+
+    # i3: $mod+Down/Up. Left/Right deliberately unbound — alt-h/alt-l cover
+    # horizontal focus, and grabbing alt-arrow starves terminal word-jump.
+    alt-down  = 'focus --boundaries-action wrap-around-the-workspace down'
+    alt-up    = 'focus --boundaries-action wrap-around-the-workspace up'
+
+    # i3 wraps focus by default
+    ctrl-shift-h =         'focus --boundaries-action wrap-around-the-workspace left'
+    ctrl-shift-j =         'focus --boundaries-action wrap-around-the-workspace down'
+    ctrl-shift-k =         'focus --boundaries-action wrap-around-the-workspace up'
+    ctrl-shift-l =         'focus --boundaries-action wrap-around-the-workspace right'
+
+    # i3: $mod+Shift+h/j/k/l
+    alt-shift-h = 'move left'
+    alt-shift-j = 'move down'
+    alt-shift-k = 'move up'
+    alt-shift-l = 'move right'
+
+    # i3: $mod+Shift+Left/Down/Up/Right
+    alt-shift-left  = 'move left'
+    alt-shift-down  = 'move down'
+    alt-shift-up    = 'move up'
+    alt-shift-right = 'move right'
+
+    # Consider using 'join-with' command as a 'split' replacement if you want to enable
+    # normalizations
+    alt-shift-minus = 'split horizontal'
+    alt-shift-backslash = 'split vertical'
+
+    # i3: $mod+Shift+f
+    alt-shift-f = 'fullscreen'
+
+    # alt-s = 'layout v_accordion' # 'layout stacking' in i3
+    alt-w = 'layout h_accordion' # 'layout tabbed' in i3
+
+    alt-shift-space = 'layout floating tiling' # 'floating toggle' in i3
+
+    # Not supported, because this command is redundant in AeroSpace mental model.
+    # See: https://nikitabobko.github.io/AeroSpace/guide#floating-windows
+    #alt-space = 'focus toggle_tiling_floating'
+
+    # `focus parent`/`focus child` are not yet supported, and it's not clear whether they
+    # should be supported at all https://github.com/nikitabobko/AeroSpace/issues/5
+    # alt-a = 'focus parent'
+
+    alt-1 = 'workspace 1'
+    alt-2 = 'workspace 2'
+    alt-3 = 'workspace 3'
+    alt-4 = 'workspace 4'
+    alt-5 = 'workspace 5'
+    alt-6 = 'workspace 6'
+    alt-7 = 'workspace 7'
+    alt-8 = 'workspace 8'
+    alt-9 = 'workspace 9'
+    alt-0 = 'workspace 10'
+
+    alt-shift-1 = 'move-node-to-workspace 1'
+    alt-shift-2 = 'move-node-to-workspace 2'
+    alt-shift-3 = 'move-node-to-workspace 3'
+    alt-shift-4 = 'move-node-to-workspace 4'
+    alt-shift-5 = 'move-node-to-workspace 5'
+    alt-shift-6 = 'move-node-to-workspace 6'
+    alt-shift-7 = 'move-node-to-workspace 7'
+    alt-shift-8 = 'move-node-to-workspace 8'
+    alt-shift-9 = 'move-node-to-workspace 9'
+    alt-shift-0 = 'move-node-to-workspace 10'
+
+    # Quick links to common sessions (creates session if it doesn't exist)
+    alt-s = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t settings || tmux new-session -d -s settings && tmux switch-client -t settings)']
+    alt-y = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-web || tmux new-session -d -s v-web && tmux switch-client -t v-web)']
+    alt-u = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-backend || tmux new-session -d -s v-backend && tmux switch-client -t v-backend)']
+    alt-i = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-apple || tmux new-session -d -s v-apple && tmux switch-client -t v-apple)']
+    alt-o = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-android || tmux new-session -d -s v-android && tmux switch-client -t v-android)']
+    alt-p = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-hoover || tmux new-session -d -s v-hoover && tmux switch-client -t v-hoover)']
+    alt-c = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-control-center || tmux new-session -d -s v-control-center && tmux switch-client -t v-control-center)']
+    alt-n = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t notes || tmux new-session -d -s notes && tmux switch-client -t notes)']
+    alt-e = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t v-psql || tmux new-session -d -s v-psql && tmux switch-client -t v-psql)']
+    alt-t = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t tunnels || tmux new-session -d -s tunnels && tmux switch-client -t tunnels)']
+    alt-a = ['workspace 2', 'exec-and-forget sleep 0.1 && (tmux switch-client -t agents || tmux new-session -d -s agents && tmux switch-client -t agents)']
+
+    alt-shift-c = 'reload-config'
+
+    alt-r = 'mode resize'
+
+[mode.resize.binding]
+    h = 'resize width -50'
+    j = 'resize height +50'
+    k = 'resize height -50'
+    l = 'resize width +50'
+    enter = 'mode main'
+    esc = 'mode main'
