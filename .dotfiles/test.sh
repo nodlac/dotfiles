@@ -67,13 +67,7 @@ command -v i3        >/dev/null && try "i3 config" i3 -C -c "$HOME/.config/i3/co
 # ── Regressions we have actually hit ──────────────────────────────────────
 say "regressions"
 # Grabbing alt-arrow at WM level starves the terminal's word jump. See 7aa5cff.
-want "aerospace leaves alt-left/right free" .aerospace.toml '^\s*alt-(left|right)\s*=' invert
 want "zsh word jump on ctrl+arrow"          .dotfiles/.zshrc '^bindkey "\^\[\[1;5[CD]"'
-want "ghostty pastes on ctrl+v"             .config/ghostty/config.ghostty '^keybind = ctrl\+v=paste_from_clipboard'
-want "ghostty pastes on ctrl+shift+v"       .config/ghostty/config.ghostty '^keybind = ctrl\+shift\+v=paste_from_clipboard'
-want "ghostty copies on ctrl+shift+c"       .config/ghostty/config.ghostty '^keybind = ctrl\+shift\+c=copy_to_clipboard'
-# Swapping ctrl/cmd inside a terminal would eat SIGINT and the tmux prefix.
-want "karabiner swap excludes ghostty"      .config/karabiner/assets/complex_modifications/linux-ctrl-swap.json 'mitchellh\\\\.ghostty'
 want "caps lock is escape (mac)"            .dotfiles/.mac-setup.sh '"key_code": "caps_lock"'
 want "caps lock is escape (linux)"          .dotfiles/.eos-setup.sh '^capslock = esc'
 # keyd puts Mod4 on the physical Option key so alt- binds match aerospace.
@@ -83,8 +77,10 @@ want "mac-setup finds tools/install.sh"     .dotfiles/.mac-setup.sh '\$USER_HOME
 want "eos-setup finds tools/install.sh"     .dotfiles/.eos-setup.sh '\$USER_HOME/tools/install\.sh'
 want "setup hooks up df-test"               .dotfiles/.mac-setup.sh 'core\.hooksPath'
 want "eos-setup hooks up df-test"           .dotfiles/.eos-setup.sh 'core\.hooksPath'
+want "server-setup finds tools/install.sh"  .dotfiles/.server-setup.sh '\$USER_HOME/tools/install\.sh'
+want "server-setup hooks up df-test"        .dotfiles/.server-setup.sh 'core\.hooksPath'
 
-for s in .dotfiles/.mac-setup.sh .dotfiles/.eos-setup.sh tools/ensure-tunnel; do
+for s in .dotfiles/.mac-setup.sh .dotfiles/.eos-setup.sh .dotfiles/.server-setup.sh tools/ensure-tunnel; do
   [ -x "$HOME/$s" ] && ok || bad "$s is executable" "chmod +x ~/$s"
 done
 

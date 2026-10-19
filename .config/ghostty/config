@@ -1,6 +1,0 @@
-# Mouse toggle handled by tmux: Ctrl-Space m
-
-gtk-single-instance = false
-
-keybind = ctrl+h=unbind
-keybind = super+enter=unbind
