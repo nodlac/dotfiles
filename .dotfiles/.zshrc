@@ -19,6 +19,7 @@ export PATH=$PATH:$HOME/.maestro/bin
 # ===========================================
 # Exports
 # ===========================================
+export SYSTEMD_EDITOR=vim
 export EDITOR=nvim
 export VISUAL=nvim
 export PYENV_ROOT="$HOME/.pyenv"
