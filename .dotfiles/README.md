@@ -41,6 +41,33 @@ git checkout
 
 The setup script: creates symlinks, installs Homebrew formulae/casks, zsh plugins, tmux plugins, npm/pip globals, and sets macOS defaults.
 
+## Fresh Install — Ubuntu Server (headless)
+
+Uses the `server` branch: desktop configs remain tracked for safe merging,
+but the server installer does not install or activate the desktop stack. It
+uses apt packages instead of pacman/AUR and sets `MACHINE_ENV=server` in `~/.env`.
+
+```bash
+git clone --bare --branch server git@github.com:nodlac/dotfiles.git ~/.dotfiles
+cd ~/.dotfiles
+git config core.bare false
+git config core.worktree ~
+git config status.showUntrackedFiles no
+git checkout
+~/.dotfiles/.server-setup.sh
+```
+
+The setup script: creates symlinks, installs apt packages, builds tmux 3.5a
+from source when the installed version is older, installs neovim from GitHub
+releases if the apt build is too old, sets up zsh/tmux plugins, installs pip
+globals, sets `MACHINE_ENV=server` in `~/.env`, and makes zsh the default shell.
+The tmux config remains compatible with Ubuntu's tmux 3.4 as a fallback.
+
+The server branch retains the desktop configs, so it can be merged into
+`main` without deleting aerospace, Ghostty, i3, or Karabiner files. The
+server-specific package list lives in `.dotfiles/.server-setup.conf` so it
+does not replace the EndeavourOS `.setup.conf`.
+
 ## Updating Dotfiles
 
 ```bash

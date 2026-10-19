@@ -81,10 +81,13 @@ want "option is meta (linux)"               .dotfiles/.eos-setup.sh '^left-optio
 # $DOTFILES_DIR is the bare git dir — tools/ lives in $USER_HOME. See e5e32de.
 want "mac-setup finds tools/install.sh"     .dotfiles/.mac-setup.sh '\$USER_HOME/tools/install\.sh'
 want "eos-setup finds tools/install.sh"     .dotfiles/.eos-setup.sh '\$USER_HOME/tools/install\.sh'
+want "server-setup finds server package list" .dotfiles/.server-setup.sh '\.server-setup\.conf'
+want "server-setup finds tools/install.sh"  .dotfiles/.server-setup.sh '\$USER_HOME/tools/install\.sh'
 want "setup hooks up df-test"               .dotfiles/.mac-setup.sh 'core\.hooksPath'
 want "eos-setup hooks up df-test"           .dotfiles/.eos-setup.sh 'core\.hooksPath'
+want "server-setup hooks up df-test"        .dotfiles/.server-setup.sh 'core\.hooksPath'
 
-for s in .dotfiles/.mac-setup.sh .dotfiles/.eos-setup.sh tools/ensure-tunnel; do
+for s in .dotfiles/.mac-setup.sh .dotfiles/.eos-setup.sh .dotfiles/.server-setup.sh tools/ensure-tunnel; do
   [ -x "$HOME/$s" ] && ok || bad "$s is executable" "chmod +x ~/$s"
 done
 

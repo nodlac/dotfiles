@@ -10,7 +10,7 @@
 # (.opencode/bin already added by .zshenv)
 export PATH="$HOME/.local/bin:$PATH"
 export PATH="/opt/homebrew/opt/libpq/bin:$PATH"
-export PATH="$PATH:$(go env GOPATH)/bin"
+command -v go &>/dev/null && export PATH="$PATH:$(go env GOPATH)/bin"
 export PATH=$PATH:$HOME/.maestro/bin
 
 # Loads Environment variables
@@ -23,8 +23,10 @@ export SYSTEMD_EDITOR=vim
 export EDITOR=nvim
 export VISUAL=nvim
 export PYENV_ROOT="$HOME/.pyenv"
-[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
-eval "$(pyenv init - zsh)"
+if [[ -d $PYENV_ROOT/bin ]]; then
+  export PATH="$PYENV_ROOT/bin:$PATH"
+  eval "$(pyenv init - zsh)"
+fi
 
 # ===========================================
 # Aliases
@@ -40,6 +42,7 @@ alias tmux-start='tmux new-session -A -s notes'
 alias settings='tmux new-session -A -s settings'
 alias eos-setup='~/.dotfiles/.eos-setup.sh'
 alias mac-setup='~/.dotfiles/.mac-setup.sh'
+alias server-setup='~/.dotfiles/.server-setup.sh'
 
 
 # ===========================================
@@ -168,6 +171,8 @@ if [[ "$MACHINE_ENV" == "work" ]]; then
   source ~/.zsh/.vidangel.zsh
 elif [[ "$MACHINE_ENV" == "nodlac" ]]; then
   source ~/.zsh/.nodlac.zsh
+elif [[ "$MACHINE_ENV" == "server" ]]; then
+  source ~/.zsh/.server.zsh
 else
   echo "Unknown MACHINE_ENV: '$MACHINE_ENV'"
 fi
