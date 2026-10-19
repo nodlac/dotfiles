@@ -66,6 +66,12 @@ load_packages() {
         cat << 'DEFAULTS'
 zsh
 tmux
+autoconf
+automake
+bison
+libevent-dev
+libncurses-dev
+pkg-config
 git
 curl
 build-essential
