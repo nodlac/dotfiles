@@ -56,9 +56,11 @@ git checkout
 ~/.dotfiles/.server-setup.sh
 ```
 
-The setup script: creates symlinks, installs apt packages (neovim from GitHub
-releases if the apt build is too old), zsh plugins, tmux plugins, pip globals,
-sets `MACHINE_ENV=server` in `~/.env`, and makes zsh the default shell.
+The setup script: creates symlinks, installs apt packages, builds tmux 3.5a
+from source when the installed version is older, installs neovim from GitHub
+releases if the apt build is too old, sets up zsh/tmux plugins, installs pip
+globals, sets `MACHINE_ENV=server` in `~/.env`, and makes zsh the default shell.
+The tmux config remains compatible with Ubuntu's tmux 3.4 as a fallback.
 
 Stay on the `server` branch — `df checkout main` would drop desktop configs
 into `$HOME`.

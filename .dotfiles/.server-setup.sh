@@ -119,6 +119,42 @@ fix_ubuntu_names() {
     fi
 }
 
+install_tmux() {
+    echo "=== Checking tmux (config uses tmux 3.5+ when available) ==="
+
+    local tmux_cmd tmux_version tmux_major tmux_minor
+    tmux_cmd="$USER_HOME/.local/bin/tmux"
+    if [ ! -x "$tmux_cmd" ]; then
+        tmux_cmd=$(command -v tmux || true)
+    fi
+
+    if [ -n "$tmux_cmd" ] && [ -x "$tmux_cmd" ]; then
+        tmux_version=$("$tmux_cmd" -V 2>/dev/null | awk '{print $2}' | head -1)
+        tmux_major="${tmux_version%%.*}"
+        tmux_minor="${tmux_version#*.}"
+        tmux_minor="${tmux_minor%%[^0-9]*}"
+        if [[ "$tmux_major" =~ ^[0-9]+$ && "$tmux_minor" =~ ^[0-9]+$ ]] && \
+           (( tmux_major > 3 || (tmux_major == 3 && tmux_minor >= 5) )); then
+            echo "  tmux $tmux_version already installed"
+            return
+        fi
+    fi
+
+    local build_dir
+    build_dir=$(mktemp -d /tmp/tmux-build.XXXXXX)
+    echo "  Building tmux 3.5a in $build_dir..."
+    git clone --depth 1 --branch 3.5a https://github.com/tmux/tmux.git "$build_dir"
+    (
+        cd "$build_dir"
+        sh autogen.sh
+        ./configure --prefix="$USER_HOME/.local"
+        make -j"$(nproc)"
+        make install
+    )
+    rm -rf "$build_dir"
+    echo "  tmux installed to $USER_HOME/.local/bin/tmux"
+}
+
 install_neovim() {
     echo "=== Checking neovim (config needs >= 0.10) ==="
 
@@ -315,6 +351,7 @@ main() {
     init_dotfiles_repo
     setup_symlinks
     install_packages
+    install_tmux
     fix_ubuntu_names
     install_neovim
     install_opencode
