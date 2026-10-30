@@ -1,3 +1,7 @@
+#########################################################
+# Llama commands
+#########################################################
+
 llama-start() {
   nohup ~/llama.cpp/build-cuda/bin/llama-server \
     --models-dir ~/llm-models \
@@ -25,3 +29,9 @@ llama-restart() {
     llama-stop
     llama-start
 }
+
+
+#########################################################
+# Aliases
+#########################################################
+alias connect-callisto="ssh -p 3250 nodlac@136.38.167.119"

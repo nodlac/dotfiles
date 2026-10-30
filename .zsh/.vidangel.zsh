@@ -2,6 +2,7 @@
 #########################################################
 # Tardis Autocomplete
 ##########################################################
+#
 fpath=( ~/vidangel-repo/tiny-tardis/.completions/zsh $fpath )
 autoload -U compinit; compinit
 
