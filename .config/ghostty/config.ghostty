@@ -10,3 +10,9 @@ keybind = ctrl+shift+v=paste_from_clipboard
 # Ghostty has no conditional binds, so this eats quoted-insert and nvim's
 # visual-block. ctrl+q is vim's built-in alias for the latter.
 keybind = ctrl+v=paste_from_clipboard
+
+# No standard byte for ctrl+backspace; send ^W (delete word) so shells/TUIs agree.
+keybind = ctrl+backspace=text:\x17
+
+# Drops underlines lower in the cell: gap between the tmux todo header and its bar.
+adjust-underline-position = 4

@@ -30,9 +30,6 @@ if.app-name-regex-substring = 'scrcpy'
 run = 'layout floating'
 
 [mode.main.binding]
-    # i3: $mod+Return
-    alt-enter = 'exec-and-forget open -na Ghostty'
-
     # i3: $mod+q
     alt-q = 'close'
 

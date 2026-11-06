@@ -7,13 +7,6 @@ fpath=( ~/vidangel-repo/tiny-tardis/.completions/zsh $fpath )
 autoload -U compinit; compinit
 
 ##########################################################
-# Work Functions
-##########################################################
-connect-lepotato() {
-     ssh -i ~/.ssh/lepotato -p 83 ubuntu@136.38.167.119
-}
-
-##########################################################
 # Internal helpers (idempotent building blocks)
 ##########################################################
 _va_ensure_colima() {
@@ -21,13 +14,22 @@ _va_ensure_colima() {
         echo "  Colima already running"
     else
         echo "  Starting Colima..."
-        colima start
+        # Default 2G/2CPU VM starves postgres; sized for a 32G/10-core Mac.
+        colima start --cpu 6 --memory 12
     fi
 }
 
 # All groups except 'gpu' — that group pins Linux/Windows-only CUDA wheels
 # (nvidia-*-cu12) with no macOS arm64 builds, so --all-groups alone fails here.
-_VA_UV_SYNC=(uv sync --all-groups --no-group gpu)
+# Newer branches also have 'gpu-dev' (includes gpu), which --no-group gpu doesn't
+# exclude; uv errors on --no-group for an undefined group, so add it per checkout.
+# Run from the checkout root.
+_va_uv_sync() {
+    local -a cmd=(uv sync --all-groups --no-group gpu)
+    grep -q '^gpu-dev = ' pyproject.toml && cmd+=(--no-group gpu-dev)
+    echo "  ${cmd[*]}"
+    "${cmd[@]}"
+}
 
 # Sync + activate the backend checkout for the current shell (worktree-aware):
 # resolve the checkout from $PWD, pull, install deps, activate the venv. uv sync
@@ -36,7 +38,7 @@ _va_ensure_repo() {
     local root; root=$(_va_backend_root)
     cd "$root" || return 1
     git pull
-    "${_VA_UV_SYNC[@]}" || return 1
+    _va_uv_sync || return 1
     source .venv/bin/activate
 }
 
@@ -52,9 +54,12 @@ _va_ensure_env() {
     w2 .templates/dev.env.hbs > .env
 }
 
+# Args before `--` are docker run flags; args after are the container command.
 _va_ensure_container() {
     local name=$1; shift
     local image=$1; shift
+    local i=${@[(i)--]}
+    local -a run_args=("${@[1,i-1]}") cmd_args=("${@[i+1,-1]}")
 
     if docker ps --format '{{.Names}}' | grep -qx "$name"; then
         echo "  $name already running"
@@ -63,7 +68,7 @@ _va_ensure_container() {
         docker start "$name"
     else
         echo "  Creating $name..."
-        docker run --name="$name" -d --restart=always "$@" "$image"
+        docker run --name="$name" -d --restart=always "${run_args[@]}" "$image" "${cmd_args[@]}"
     fi
 }
 
@@ -74,7 +79,23 @@ _va_ensure_containers() {
         -e POSTGRES_DB=vidangel \
         -e POSTGRES_HOST_AUTH_METHOD=trust \
         -v vidangel-postgres-data:/var/lib/postgresql/data \
-        -p 5432:5432
+        -p 5432:5432 \
+        -- \
+        -c shared_buffers=3GB \
+        -c effective_cache_size=8GB \
+        -c work_mem=32MB \
+        -c maintenance_work_mem=1GB \
+        -c synchronous_commit=off \
+        -c full_page_writes=off \
+        -c max_wal_size=4GB \
+        -c checkpoint_completion_target=0.9 \
+        -c random_page_cost=1.1 \
+        -c effective_io_concurrency=200 \
+        -c max_worker_processes=8 \
+        -c max_parallel_workers=6 \
+        -c max_parallel_workers_per_gather=3 \
+        -c max_parallel_maintenance_workers=3 \
+        -c dynamic_shared_memory_type=mmap
 
     _va_ensure_container vidangel-redis redis:7.2.0-alpine \
         -p 6379:6379
@@ -128,28 +149,17 @@ _va_ensure_db_data() {
     echo ""
     echo "  Database is empty or does not exist."
 
-    # Check for cached dump first, then Downloads
-    local cache_dir=~/.cache/vidangel
-    if [[ -f "$cache_dir/dev.dump" ]]; then
-        echo "  Found cached dump at $cache_dir/dev.dump"
-        echo -n "  Restore from cache? [Y/n] "
+    local answer
+    if [[ -f ~/.cache/vidangel/dev.dump ]]; then
+        echo -n "  Restore from cached dump? (n = pull fresh from S3) [Y/n] "
         read -r answer
-        if [[ ! "$answer" =~ ^[Nn] ]]; then
-            vidangel-restore-dev-dump
-            return $?
-        fi
-    elif [[ -f ~/Downloads/dev.dump ]]; then
-        echo "  Found dump at ~/Downloads/dev.dump"
-        echo -n "  Restore from Downloads? [Y/n] "
+        [[ "$answer" =~ ^[Nn] ]] || { vidangel-refresh-db --cached; return $?; }
+    else
+        echo -n "  Pull dev.dump from S3 and restore? [Y/n] "
         read -r answer
-        if [[ ! "$answer" =~ ^[Nn] ]]; then
-            vidangel-restore-dev-dump
-            return $?
-        fi
+        [[ "$answer" =~ ^[Nn] ]] && { echo "  Skipping. Run 'vidangel-refresh-db' when ready."; return 1; }
     fi
-
-    echo "  Skipping restore. Download dev.dump and run 'vidangel-restore-dev-dump' when ready."
-    return 1
+    vidangel-refresh-db
 }
 
 # Shared boot core: render this checkout's .env + bring up the shared infra
@@ -275,34 +285,51 @@ vidangel-reset-server() {
     python3 manage.py offerings_materialized_view -c
 }
 
-vidangel-restore-dev-dump() {
-    local cache_dir=~/.cache/vidangel
-    local DUMP_FILE=""
-
-    # Prefer fresh download, fall back to cache
-    if [[ -f ~/Downloads/dev.dump ]]; then
-        DUMP_FILE=~/Downloads/dev.dump
-    elif [[ -f "$cache_dir/dev.dump" ]]; then
-        echo "No fresh dump in ~/Downloads, using cached version."
-        DUMP_FILE="$cache_dir/dev.dump"
-    else
-        echo "Error: No dump file found. Download dev.dump to ~/Downloads first."
-        return 1
+# The account's Enforce_MFA policy denies S3 without MFA, so plain IAM keys
+# can't read the dump bucket. Session creds land in the `mfa` profile and are
+# reused until they expire.
+_va_aws_mfa() {
+    if aws sts get-caller-identity --profile mfa &>/dev/null; then
+        echo "  AWS MFA session still valid"
+        return 0
     fi
+    local serial code k s t
+    serial=$(aws iam list-mfa-devices --query 'MFADevices[0].SerialNumber' --output text) || return 1
+    echo -n "  MFA code for $serial: "
+    read -r code
+    read -r k s t <<<"$(aws sts get-session-token --serial-number "$serial" --token-code "$code" \
+        --duration-seconds 43200 \
+        --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)" || return 1
+    [[ -n "$t" ]] || { echo "  FAIL: no session token returned"; return 1; }
+    aws configure set aws_access_key_id "$k" --profile mfa
+    aws configure set aws_secret_access_key "$s" --profile mfa
+    aws configure set aws_session_token "$t" --profile mfa
+    echo "  AWS MFA session ready (12h)"
+}
 
+# Pulls the nightly dump from S3 and replaces the local vidangel DB.
+# --cached restores the last downloaded dump without hitting S3.
+vidangel-refresh-db() {
+    local cache_dir=~/.cache/vidangel
+    local DUMP_FILE="$cache_dir/dev.dump"
+
+    if [[ "$1" != "--cached" ]]; then
+        echo "[1/3] AWS MFA login"
+        _va_aws_mfa || return 1
+        echo "[2/3] Downloading s3://vidangel-db-daily-dump/dev.dump"
+        mkdir -p "$cache_dir"
+        aws s3 cp s3://vidangel-db-daily-dump/dev.dump "$DUMP_FILE.part" --profile mfa \
+            && mv "$DUMP_FILE.part" "$DUMP_FILE" || return 1
+    fi
+    [[ -f "$DUMP_FILE" ]] || { echo "Error: no dump at $DUMP_FILE"; return 1; }
+
+    echo "[3/3] Restoring $DUMP_FILE (drops local vidangel DB)"
     _va_wait_for_postgres || return 1
 
     psql -h localhost -p 5432 -U root -d postgres -c "CREATE ROLE pgadmin WITH SUPERUSER LOGIN PASSWORD 'dev';" 2>/dev/null
     psql -h localhost -p 5432 -U root -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'vidangel';"
     psql -h localhost -p 5432 -U root -d postgres -c 'DROP DATABASE IF EXISTS vidangel;'
-    pg_restore -h localhost -p 5432 -U pgadmin -x -C -d postgres "$DUMP_FILE"
-
-    # Cache the dump for future restores and clean up Downloads
-    if [[ "$DUMP_FILE" == */Downloads/* ]]; then
-        mkdir -p "$cache_dir"
-        mv "$DUMP_FILE" "$cache_dir/dev.dump"
-        echo "Dump cached at $cache_dir/dev.dump (removed from Downloads)"
-    fi
+    pg_restore -h localhost -p 5432 -U pgadmin -x -C -j 6 -d postgres "$DUMP_FILE"
 
     vidangel-reset-server
 }
@@ -345,7 +372,7 @@ vidangel-preflight() {
         echo "  PASS  Database has data ($row_count subscriptions)"
         ((pass++))
     else
-        echo "  FAIL  Database is empty — run 'vidangel-restore-dev-dump'"
+        echo "  FAIL  Database is empty — run 'vidangel-refresh-db'"
         ((fail++))
     fi
 
@@ -393,6 +420,7 @@ _va_devserver_env() {
     export ENABLE_TRACING_MIDDLEWARE=False
     export FILTER_HOST=https://sepia.vidangel.com
     export PYTHONUNBUFFERED=1
+    export PGGSSENCMODE=disable
 }
 
 # Plain HTTP by default. Pass --secure (or set VA_SECURE=1) for TLS.
@@ -412,6 +440,8 @@ _va_runserver() {
         shift
     done
 
+    # Second server in another worktree: VA_PORT=8001 vidangel-run-devserver.
+    local port=${VA_PORT:-8000}
     local -a tls_args
     if [[ -n "$secure" ]]; then
         local certs="$HOME/vidangel-repo/vidangel-backend/server/certs"
@@ -420,12 +450,12 @@ _va_runserver() {
             "$HOME/vidangel-repo/vidangel-backend/server/gen-certs.sh" || return 1
         fi
         tls_args=(--cert-file "$certs/localhost.pem" --key-file "$certs/localhost-key.pem")
-        echo "  Serving HTTPS on :8000"
+        echo "  Serving HTTPS on :$port"
     else
-        echo "  Serving HTTP on :8000 (pass --secure for TLS)"
+        echo "  Serving HTTP on :$port (pass --secure for TLS)"
     fi
 
-    python3 manage.py runserver_debug "${tls_args[@]}" --skip-checks --skip-migration-checks --print-sql-location --reloader-type=watchdog
+    python3 manage.py runserver_debug "$port" "${tls_args[@]}" --skip-checks --skip-migration-checks --print-sql-location --reloader-type=watchdog
 }
 
 # Resolve the backend checkout for the current shell (worktree-aware): walk up
@@ -503,6 +533,64 @@ vidangel-kill-backend() {
     [[ -n "$port_pids" ]] && { echo "  Freeing port 8000"; echo "$port_pids" | xargs kill -9 2>/dev/null; }
 }
 
+# Make a checkout runnable (venv + env files) without touching anything shared:
+# no kill, no infra, no migrations, no runserver — safe in any number of
+# worktrees at once. Idempotent. Defaults to the checkout for THIS shell.
+vidangel-prep-backend() {
+    local root=${1:-$(_va_backend_root)}
+    root=${root:A}
+    if [[ ! -f "$root/manage.py" ]]; then
+        echo "  Not a backend checkout: $root"; return 1
+    fi
+    echo "=== Prepping backend -> $root ==="
+
+    # psycopg2 + GSSAPI negotiation segfaults pytest-xdist workers on macOS.
+    export PGGSSENCMODE=disable
+
+    # Subshell so prepping another path doesn't move the caller's cwd.
+    (
+        cd "$root" || exit 1
+
+        # Worktrees start without a .venv (gitignored, not carried over). Build one
+        # with 'uv sync' so this branch's exact deps are installed. We don't copy the
+        # main repo's .venv: venvs aren't relocatable (absolute paths in pyvenv.cfg /
+        # bin shebangs / activate), and uv's global cache makes a fresh sync fast.
+        if [[ ! -f .venv/bin/activate ]]; then
+            echo "  No .venv in worktree — creating with uv sync..."
+            # Remove any partial venv from a previous failed sync so we start clean,
+            # and tear it down again if this sync fails (a half-built venv would
+            # otherwise pass the activate check above on the next run).
+            rm -rf .venv
+            _va_uv_sync || { echo "  uv sync failed."; rm -rf .venv; exit 1; }
+        fi
+
+        # Only render when missing: re-rendering would hit vault once per worktree
+        # and write through .env symlinks into the main repo's copy. switch-backend
+        # still re-renders on every switch via _va_boot.
+        [[ -e .env ]] || _va_ensure_env || exit 1
+
+        # .env.local is hand-kept local overrides, not rendered — share the main
+        # repo's so every worktree runs with the same overrides.
+        local main=$HOME/vidangel-repo/vidangel-backend
+        if [[ ! -e .env.local && -f $main/.env.local && $PWD != $main ]]; then
+            ln -s "$main/.env.local" .env.local && echo "  Linked .env.local from main repo"
+        fi
+    )
+}
+
+# Prep every backend worktree; keeps going past failures and lists them.
+vidangel-prep-all-backends() {
+    local main=$HOME/vidangel-repo/vidangel-backend
+    local -a failed
+    local p
+    for p in ${(f)"$(git -C "$main" worktree list --porcelain | sed -n 's/^worktree //p')"}; do
+        [[ -f "$p/manage.py" ]] || continue
+        vidangel-prep-backend "$p" || failed+=("$p")
+    done
+    (( ${#failed} )) && { printf "  FAILED: %s\n" "${failed[@]}"; return 1; }
+    return 0
+}
+
 # Kill the current backend and run the one for THIS checkout (worktree-aware).
 vidangel-switch-backend() {
     local root; root=$(_va_backend_root)
@@ -511,18 +599,7 @@ vidangel-switch-backend() {
 
     cd "$root" || return 1
 
-    # Worktrees start without a .venv (gitignored, not carried over). Build one
-    # with 'uv sync' so this branch's exact deps are installed. We don't copy the
-    # main repo's .venv: venvs aren't relocatable (absolute paths in pyvenv.cfg /
-    # bin shebangs / activate), and uv's global cache makes a fresh sync fast.
-    if [[ ! -f .venv/bin/activate ]]; then
-        echo "  No .venv in worktree — creating with '${_VA_UV_SYNC[*]}'..."
-        # Remove any partial venv from a previous failed sync so we start clean,
-        # and tear it down again if this sync fails (a half-built venv would
-        # otherwise pass the activate check above on the next run).
-        rm -rf .venv
-        "${_VA_UV_SYNC[@]}" || { echo "  uv sync failed."; rm -rf .venv; return 1; }
-    fi
+    vidangel-prep-backend "$root" || return 1
     source .venv/bin/activate
     _va_devserver_env
 
