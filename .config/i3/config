@@ -626,4 +626,3 @@ bindsym $mod+g exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-clien
 bindsym $mod+a exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t AOC || tmux new-session -d -s AOC && tmux switch-client -t AOC"
 bindsym $mod+b exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t BD || tmux new-session -d -s BD && tmux switch-client -t BD"
 bindsym $mod+p exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t POS || tmux new-session -d -s POS && tmux switch-client -t POS"
-bindsym $mod+y exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t yerba-mate || tmux new-session -d -s yerba-mate && tmux switch-client -t yerba-mate"
