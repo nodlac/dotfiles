@@ -8,3 +8,9 @@ jlog() { journalctl -fu "$1"; }
 
 # apt upgrade shorthand
 sysupdate() { sudo apt-get update && sudo apt-get upgrade; }
+
+
+##############################################################
+# Aliases
+##############################################################
+alias tm="tmux attach-session"

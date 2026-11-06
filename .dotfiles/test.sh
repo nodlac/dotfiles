@@ -56,6 +56,13 @@ while IFS= read -r f; do
   esac
 done < <(dgit ls-files)
 
+if [ -f "$HOME/tools/server-hosting-setup.sh" ]; then
+  try "server hosting setup syntax" bash -n "$HOME/tools/server-hosting-setup.sh"
+fi
+if [ -f "$HOME/tools/infisical-first-admin.sh" ]; then
+  try "Infisical first-admin helper syntax" bash -n "$HOME/tools/infisical-first-admin.sh"
+fi
+
 # ── Each tool parses its own config ───────────────────────────────────────
 say "configs load"
 GHOSTTY=$(command -v ghostty || echo /Applications/Ghostty.app/Contents/MacOS/ghostty)
@@ -83,11 +90,12 @@ want "mac-setup finds tools/install.sh"     .dotfiles/.mac-setup.sh '\$USER_HOME
 want "eos-setup finds tools/install.sh"     .dotfiles/.eos-setup.sh '\$USER_HOME/tools/install\.sh'
 want "server-setup finds server package list" .dotfiles/.server-setup.sh '\.server-setup\.conf'
 want "server-setup finds tools/install.sh"  .dotfiles/.server-setup.sh '\$USER_HOME/tools/install\.sh'
+want "server-setup invokes hosting add-on"   .dotfiles/.server-setup.sh 'setup_server_hosting'
 want "setup hooks up df-test"               .dotfiles/.mac-setup.sh 'core\.hooksPath'
 want "eos-setup hooks up df-test"           .dotfiles/.eos-setup.sh 'core\.hooksPath'
 want "server-setup hooks up df-test"        .dotfiles/.server-setup.sh 'core\.hooksPath'
 
-for s in .dotfiles/.mac-setup.sh .dotfiles/.eos-setup.sh .dotfiles/.server-setup.sh tools/ensure-tunnel; do
+for s in .dotfiles/.mac-setup.sh .dotfiles/.eos-setup.sh .dotfiles/.server-setup.sh tools/server-hosting-setup.sh tools/infisical-first-admin.sh tools/ensure-tunnel; do
   [ -x "$HOME/$s" ] && ok || bad "$s is executable" "chmod +x ~/$s"
 done
 

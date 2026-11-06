@@ -1,6 +1,17 @@
+local workspaces = {}
+for _, workspace in ipairs({
+  { name = 'personal', path = '~/notes/nodlac_notes/' },
+  { name = 'work', path = '~/notes/work_notes/' },
+}) do
+  if vim.fn.isdirectory(vim.fn.expand(workspace.path)) == 1 then
+    table.insert(workspaces, workspace)
+  end
+end
+
 return {
   'epwalsh/obsidian.nvim',
   version = '*', -- recommended, use latest release instead of latest commit
+  enabled = #workspaces > 0,
   lazy = false,
   ft = 'markdown',
   -- Replace the above line with this if you only want to load obsidian.nvim for markdown files in your vault:
@@ -22,15 +33,6 @@ return {
     ui = {
       enable = false,
     },
-    workspaces = {
-      {
-        name = 'personal',
-        path = '~/notes/nodlac_notes/',
-      },
-      {
-        name = 'work',
-        path = '~/notes/work_notes/',
-      },
-    },
+    workspaces = workspaces,
   },
 }

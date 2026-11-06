@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # .server-setup.sh — Ubuntu Server (headless) setup for the dotfiles "server" branch.
 # Run without sudo: ~/.dotfiles/.server-setup.sh  (prompts for sudo password when needed)
+
+# Re-exec under bash if invoked with sh/dash (uses bashisms: mapfile, <(...), declare -A)
+if [ -z "$BASH_VERSION" ]; then exec bash "$0" "$@"; fi
+
 set -e
 
 TARGET_USER="${SUDO_USER:-$USER}"
@@ -58,7 +62,7 @@ load_packages() {
         echo "  Reading from $CONFIG_FILE" >&2
         grep -v '^#' "$CONFIG_FILE" | grep -v '^$' | grep -v '^-' | awk '{print $1}' | sort -u
     else
-        echo "  $CONFIG_FILE not found, using defaults"
+        echo "  $CONFIG_FILE not found, using defaults" >&2
         cat << 'DEFAULTS'
 zsh
 tmux
@@ -196,7 +200,8 @@ install_opencode() {
         echo "  opencode already installed"
     else
         mkdir -p "$USER_HOME/.opencode/bin"
-        curl -fsSL https://opencode.ai/install | sh
+        # bash: installer uses bashisms; --no-modify-path: PATH is managed by .zshenv
+        curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path
         echo "  opencode installed to $USER_HOME/.opencode/bin"
     fi
 }
@@ -324,10 +329,29 @@ setup_docker() {
         sudo systemctl enable --now docker 2>/dev/null || true
         if id -nG "$TARGET_USER" | grep -qw docker; then
             echo "  $TARGET_USER already in docker group"
+        elif [ -t 0 ]; then
+            local answer
+            echo "  Note: the docker group grants root-equivalent access."
+            read -r -p "  Add $TARGET_USER to the docker group? [y/N] " answer
+            case "$answer" in
+                y|Y|yes|YES)
+                    sudo usermod -aG docker "$TARGET_USER"
+                    echo "  added $TARGET_USER to docker group (log out/in to apply)"
+                    ;;
+                *) echo "  keeping $TARGET_USER out of docker group; use sudo docker instead" ;;
+            esac
         else
-            sudo usermod -aG docker "$TARGET_USER"
-            echo "  added $TARGET_USER to docker group (log out/in to apply)"
+            echo "  not adding $TARGET_USER to docker group (root-equivalent); use sudo docker"
         fi
+    fi
+}
+
+setup_server_hosting() {
+    local hosting_script="$USER_HOME/tools/server-hosting-setup.sh"
+    if [ -x "$hosting_script" ]; then
+        "$hosting_script" "$USER_HOME"
+    else
+        echo "  server hosting add-on not found: $hosting_script"
     fi
 }
 
@@ -363,6 +387,7 @@ main() {
     setup_env_file
     setup_docker
     set_default_shell
+    setup_server_hosting
     # setup_tools          # work tools (ClickUp/sprint-sync) — uncomment if wanted
     # setup_agent_tools    # agent-dashboard — uncomment if wanted
 
