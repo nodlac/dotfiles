@@ -49,6 +49,43 @@ alias server-setup='~/.dotfiles/.server-setup.sh'
 # Functions
 # ===========================================
 
+# Prompt for a Cloudflare Tunnel token and start/recreate the detached container.
+# The token is stored privately so Docker can restart the tunnel after a reboot.
+cloudflared-start() {
+    local token_file="$HOME/.config/cloudflared/tunnel-token"
+    local temp_file="${token_file}.tmp.$$"
+    local token
+
+    if ! docker info >/dev/null 2>&1; then
+        echo "Docker is not available or the daemon is not running."
+        return 1
+    fi
+
+    mkdir -p "${token_file:h}" || return 1
+    chmod 700 "${token_file:h}" || return 1
+
+    printf 'Enter Cloudflare Tunnel token: '
+    read -r -s token || return 1
+    printf '\n'
+    if [[ -z "$token" ]]; then
+        echo "Token cannot be empty."
+        return 1
+    fi
+
+    (umask 077; printf '%s' "$token" > "$temp_file") || return 1
+    unset token
+    mv "$temp_file" "$token_file" || return 1
+    chmod 600 "$token_file" || return 1
+
+    docker rm -f cloudflared >/dev/null 2>&1 || true
+    docker run -d \\
+        --name cloudflared \\
+        --restart unless-stopped \\
+        --mount "type=bind,src=$token_file,dst=/run/secrets/tunnel-token,readonly" \\
+        cloudflare/cloudflared:latest \\
+        tunnel --no-autoupdate run --token-file /run/secrets/tunnel-token
+}
+
 # Run a .sql file and save results as CSV to ~/Downloads
 # Usage: sqlrun <db> <file.sql>
 #   db: bim, finn, bim_stag, finn_stag
@@ -173,6 +210,7 @@ elif [[ "$MACHINE_ENV" == "nodlac" ]]; then
   source ~/.zsh/.nodlac.zsh
 elif [[ "$MACHINE_ENV" == "server" ]]; then
   source ~/.zsh/.server.zsh
+  PS1="%F{blue}Callisto:%f %F{blue}%~%f $ "
 else
   echo "Unknown MACHINE_ENV: '$MACHINE_ENV'"
 fi
