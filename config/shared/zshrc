@@ -32,6 +32,25 @@ alias settings='tmux new-session -A -s settings'
 dotfiles-setup() { bash "$DOTFILES_ROOT/setup.sh" "$@"; }
 PS1='%F{blue}%~%f $ '
 
+# Nudge when the checkout is behind its upstream. TTY-only, so scripts, tests
+# and non-interactive shells never trigger output or the daily background fetch.
+dtf-nudge() {
+    [[ -t 1 && -e "$DOTFILES_ROOT/.git" ]] || return 0
+    zmodload zsh/datetime 2>/dev/null || return 0
+    local stamp="$HOME/.local/state/dotfiles/fetch-stamp" last=0 behind
+    [[ ! -r $stamp ]] || last=$(<$stamp)
+    [[ $last == <-> ]] || last=0
+    if (( EPOCHSECONDS - last > 86400 )); then
+        mkdir -p "${stamp:h}" && print -r -- "$EPOCHSECONDS" >| "$stamp"
+        # Refresh refs only; never touches the worktree. Result shows next shell.
+        (git -C "$DOTFILES_ROOT" fetch --quiet 2>/dev/null &)
+    fi
+    behind=$(git -C "$DOTFILES_ROOT" rev-list --count 'HEAD..@{upstream}' 2>/dev/null) || return 0
+    (( behind )) && print -r -- "dotfiles: $behind behind — run dtf pull"
+    return 0
+}
+dtf-nudge
+
 source "$DOTFILES_ROOT/platform/detect.sh"
 if detect_platform; then
     [[ ! -r "$DOTFILES_ROOT/platform/$DF_OS.zsh" ]] || source "$DOTFILES_ROOT/platform/$DF_OS.zsh"
