@@ -1,0 +1,14 @@
+# One reviewed package name per line. Applied only with --install-packages.
+ghostty
+i3-wm
+rofi
+dunst
+i3blocks
+i3lock
+xclip
+scrot
+obs-studio
+kdenlive
+inkscape
+gimp
+scrcpy

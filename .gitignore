@@ -1,0 +1,7 @@
+# Local-only state; never commit credentials or machine overrides.
+.env
+.env.*
+*.pyc
+__pycache__/
+.DS_Store
+/local/

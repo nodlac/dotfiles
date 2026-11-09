@@ -1,3 +1,7 @@
 #!/usr/bin/env bash
-# Enabled by `df config core.hooksPath ~/tools/git-hooks` in the setup scripts.
-exec "$HOME/.dotfiles/test.sh"
+# Optional, explicit activation: dtf config core.hooksPath tools/git-hooks
+# Checks the working tree, NOT the staged index. See docs/TESTING.md.
+set -e
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+root=$(git rev-parse --show-toplevel)
+exec bash "$root/tests/run.sh"

@@ -1,0 +1,22 @@
+# One reviewed package name per line. Applied only with --install-packages.
+git
+curl
+zsh
+tmux
+autoconf
+automake
+bison
+libevent-dev
+libncurses-dev
+pkg-config
+build-essential
+python3-pip
+python3-venv
+fzf
+fd-find
+ripgrep
+bat
+jq
+htop
+unzip
+tealdeer

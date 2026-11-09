@@ -1,0 +1,36 @@
+name: Dotfiles checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  portable:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install validators (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh tmux
+      - name: Install validators (macOS)
+        if: runner.os == 'macOS'
+        run: brew install zsh tmux
+      - name: Verify required validators are available
+        run: command -v python3 && command -v git && command -v zsh && command -v tmux
+      - name: Run isolated tests
+        run: /bin/bash tests/run.sh
+  arch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test as an ordinary user inside Arch Linux
+        run: |
+          docker run --rm -v "$PWD:/src:ro" archlinux:base bash -ec '
+            pacman -Syu --noconfirm --needed git python zsh tmux
+            useradd -m -s /bin/bash tester
+            su tester -c "cd /src && bash tests/run.sh"
+          '

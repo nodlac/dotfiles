@@ -1,0 +1,18 @@
+# One reviewed package name per line. Applied only with --install-packages.
+ghostty
+aerospace
+karabiner-elements
+brave-browser
+slack
+figma
+notunes
+obs
+kdenlive
+inkscape
+gimp
+local
+google-drive
+android-commandlinetools
+temurin@17
+maestro
+ngrok

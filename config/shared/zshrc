@@ -1,0 +1,86 @@
+# Portable interactive shell; no implicit credential or work-note loading.
+[[ -o interactive ]] || return 0
+typeset -g DOTFILES_ROOT=${${(%):-%x}:A:h:h:h}
+export DOTFILES_ROOT
+typeset -U path PATH
+path=("$HOME/.local/bin" "$HOME/bin" "$HOME/.npm-global/bin" "$HOME/.opencode/bin" "$HOME/.maestro/bin" $path)
+export EDITOR=nvim VISUAL=nvim SYSTEMD_EDITOR=vim
+export PYENV_ROOT="$HOME/.pyenv"
+[[ ! -d "$PYENV_ROOT/bin" ]] || path=("$PYENV_ROOT/bin" $path)
+if command -v pyenv >/dev/null 2>&1; then
+    eval "$(pyenv init - zsh)"
+fi
+if command -v go >/dev/null 2>&1; then
+    path+=("$(go env GOPATH)/bin")
+fi
+
+# The native df command is deliberately not aliased or wrapped.
+# Remove legacy helper aliases before defining replacements on an explicit reload.
+unalias dtf dtf-test dtf-quick-commit 2>/dev/null || true
+alias dtf='git -C "$DOTFILES_ROOT"'
+dtf-test() { bash "$DOTFILES_ROOT/tests/run.sh" "$@"; }
+# Explicit user-invoked helper only; bootstrap never invokes it.
+dtf-quick-commit() {
+    git -C "$DOTFILES_ROOT" add --update &&
+    git -C "$DOTFILES_ROOT" status &&
+    git -C "$DOTFILES_ROOT" commit &&
+    git -C "$DOTFILES_ROOT" push
+}
+alias python=python3
+alias tmux-start='tmux new-session -A -s notes'
+alias settings='tmux new-session -A -s settings'
+dotfiles-setup() { bash "$DOTFILES_ROOT/setup.sh" "$@"; }
+PS1='%F{blue}%~%f $ '
+
+source "$DOTFILES_ROOT/platform/detect.sh"
+if detect_platform; then
+    [[ ! -r "$DOTFILES_ROOT/platform/$DF_OS.zsh" ]] || source "$DOTFILES_ROOT/platform/$DF_OS.zsh"
+fi
+[[ ! -r "$HOME/.config/dotfiles/machine.zsh" ]] || source "$HOME/.config/dotfiles/machine.zsh"
+
+# Plugins are optional. A fresh offline checkout must load without errors.
+for plugin in "$HOME/.zsh/zsh-completions/src"; do
+    [[ ! -d "$plugin" ]] || fpath=("$plugin" $fpath)
+done
+autoload -Uz compinit
+compinit
+for plugin in \
+    "$HOME/.zsh/zsh-history-substring-search/zsh-history-substring-search.zsh" \
+    "$HOME/.zsh/zsh-autosuggestions/zsh-autosuggestions.zsh" \
+    "$HOME/.zsh/fzf-tab/fzf-tab.plugin.zsh" \
+    "$HOME/.zsh/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh"; do
+    [[ ! -r "$plugin" ]] || source "$plugin"
+done
+unset plugin
+bindkey -v
+if (( $+functions[history-substring-search-up] )); then
+    bindkey "^[[A" history-substring-search-up
+    bindkey "^[[B" history-substring-search-down
+    bindkey -M vicmd k history-substring-search-up
+    bindkey -M vicmd j history-substring-search-down
+else
+    bindkey "^[[A" up-line-or-history
+    bindkey "^[[B" down-line-or-history
+fi
+bindkey "^[[1;5D" backward-word
+bindkey "^[[1;5C" forward-word
+zle-keymap-select() {
+    [[ -t 1 ]] || return 0
+    if [[ $KEYMAP = vicmd ]]; then print -n -- '\e[2 q'
+    else print -n -- '\e[6 q'; fi
+}
+zle -N zle-keymap-select
+cursor-beam() { print -n -- '\e[6 q'; }
+cursor-block() { print -n -- '\e[2 q'; }
+[[ ! -t 1 ]] || cursor-beam
+HISTSIZE=10000
+SAVEHIST=10000
+HISTFILE="$HOME/.zsh_history"
+zstyle ':completion:*' menu select
+zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
+zstyle ':completion:*' list-colors "${(s.:.)LS_COLORS}"
+zstyle ':completion:*' group-name ''
+zstyle ':completion:*:descriptions' format '%B%d%b'
+# Deliberately last; maintained by the user and never created/replaced by setup.
+[[ ! -r "$HOME/.config/dotfiles/local.zsh" ]] || source "$HOME/.config/dotfiles/local.zsh"
+return 0

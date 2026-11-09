@@ -1,0 +1,494 @@
+#!/usr/bin/env python3
+"""Portable regression suite. Explicit allowlists; no live-home or secret scans."""
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+# Explicitly exercise Apple's system Bash 3.2 on macOS, even if brew has Bash 5.
+BASH = '/bin/bash' if Path('/bin/bash').is_file() else shutil.which('bash')
+ZSH = shutil.which('zsh')
+TMUX = shutil.which('tmux')
+GIT = shutil.which('git')
+BASE_ENV = {
+    'PATH': os.pathsep.join(dict.fromkeys([str(Path(BASH).parent), '/usr/local/bin', '/usr/bin', '/bin'])),
+    'LC_ALL': 'C', 'TERM': 'xterm-256color',
+    'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1',
+}
+
+
+def run(args, env, **kwargs):
+    return subprocess.run(args, env=env, text=True, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, timeout=60, **kwargs)
+
+
+def snapshot(home):
+    # Called only on homes created by these tests; never the actual user home.
+    result = {}
+    for p in sorted(home.rglob('*')):
+        name = str(p.relative_to(home))
+        if p.is_symlink():
+            result[name] = ('link', os.readlink(p), p.lstat().st_mtime_ns)
+        elif p.is_file():
+            result[name] = ('file', p.read_bytes(), p.stat().st_mtime_ns)
+        else:
+            result[name] = ('dir',)
+    return result
+
+
+class SetupTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='dotfiles-tests-')
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name).resolve()
+        self.home = self.base / 'home with spaces'
+        self.home.mkdir()
+        self.repo = self.base / 'repo with spaces'
+        self.repo.mkdir()
+        # Never copy arbitrary tracked files, credentials or private work configs.
+        for name in ['setup.sh', 'lib/setup.sh', 'platform/detect.sh',
+                     'platform/linux.zsh', 'platform/macos.zsh',
+                     '.dotfiles/.eos-setup.sh', '.dotfiles/.mac-setup.sh',
+                     '.dotfiles/.server-setup.sh', '.dotfiles/.zshrc', '.dotfiles/.zshenv']:
+            target = self.repo / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / name, target)
+        for name in ['config/shared', 'machines', 'platform/packages']:
+            shutil.copytree(ROOT / name, self.repo / name)
+        self.env = dict(BASE_ENV, HOME=str(self.home), ZDOTDIR=str(self.home))
+        result = run([GIT, 'init', '-q', str(self.repo)], self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # Setup flow uses a stub; actual detection has its own fixture tests below.
+        self.fake_platform()
+
+    def fake_platform(self, os_name='linux', distro='ubuntu', wsl='none'):
+        (self.repo / 'platform/detect.sh').write_text(
+            'detect_platform() { DF_OS=%s; DF_DISTRO=%s; DF_WSL=%s; }\n'
+            % (os_name, distro, wsl))
+
+    def setup(self, *args, ok=True):
+        result = run([BASH, str(self.repo / 'setup.sh'), *args], self.env)
+        if ok:
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        else:
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result
+
+    def shell(self, code):
+        return run([ZSH, '-d', '-i', '-c', code], self.env)
+
+    def test_entrypoint_is_executable(self):
+        self.assertTrue(os.access(ROOT / 'setup.sh', os.X_OK))
+
+    def test_help(self):
+        self.assertIn('--dry-run', self.setup('--help').stdout)
+        self.assertEqual(snapshot(self.home), {})
+
+    def test_compatibility_entrypoints_delegate(self):
+        for name in ['.eos-setup.sh', '.mac-setup.sh', '.server-setup.sh']:
+            result = run([BASH, str(self.repo / '.dotfiles' / name), '--help'], self.env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('Usage: ./setup.sh', result.stdout)
+        result = run([BASH, str(self.repo / '.dotfiles/.server-setup.sh'), '--dry-run'], self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(snapshot(self.home), {})
+
+    @unittest.skipUnless(ZSH, 'zsh unavailable')
+    def test_compatibility_shell_loaders(self):
+        self.setup()
+        result = self.shell('source "$DOTFILES_ROOT/.dotfiles/.zshenv"; '
+                            'source "$DOTFILES_ROOT/.dotfiles/.zshrc"; '
+                            '[[ $(dtf rev-parse --show-toplevel) = "$DOTFILES_ROOT" ]]')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, '')
+
+    def test_detect_only(self):
+        self.assertIn('distro=ubuntu', self.setup('--detect').stdout)
+        self.assertEqual(snapshot(self.home), {})
+
+    def test_dry_run_has_no_side_effects(self):
+        before = snapshot(self.home)
+        result = self.setup('--dry-run')
+        self.assertIn('LINK', result.stdout)
+        self.assertEqual(snapshot(self.home), before)
+
+    def test_links_and_idempotency(self):
+        self.setup()
+        self.assertEqual((self.home / '.zshrc').resolve(), self.repo / 'config/shared/zshrc')
+        self.assertEqual((self.home / '.local/share/dotfiles').resolve(), self.repo)
+        self.assertFalse((self.home / '.config/ghostty').exists())
+        before = snapshot(self.home)
+        self.setup()
+        self.setup('--dry-run')
+        self.assertEqual(snapshot(self.home), before)
+
+    def test_conflict_is_atomic_and_unchanged(self):
+        (self.home / '.zshrc').write_text('old config\n')
+        before = snapshot(self.home)
+        for options in [[], ['--dry-run']]:
+            self.assertIn('CONFLICT', self.setup(*options, ok=False).stdout)
+            self.assertEqual(snapshot(self.home), before)
+        self.assertFalse((self.home / '.local').exists())
+
+    def test_explicit_backup_and_replace(self):
+        (self.home / '.zshrc').write_text('my old shell\n')
+        (self.home / '.tmux.conf').symlink_to('missing-target')
+        before = snapshot(self.home)
+        result = self.setup('--replace', '--dry-run')
+        self.assertIn('BACKUP', result.stdout)
+        self.assertEqual(snapshot(self.home), before)
+        self.setup('--replace')
+        backups = self.home / '.local/state/dotfiles/backups'
+        first = list(backups.iterdir())
+        self.assertEqual(len(first), 1)
+        self.assertEqual(first[0].stat().st_mode & 0o077, 0)
+        self.assertEqual((first[0] / '.zshrc').read_text(), 'my old shell\n')
+        self.assertEqual(os.readlink(first[0] / '.tmux.conf'), 'missing-target')
+        before = snapshot(self.home)
+        self.setup('--replace')
+        self.assertEqual(snapshot(self.home), before)
+
+    def test_distinct_runs_preserve_prior_backups(self):
+        (self.home / '.zshrc').write_text('first')
+        self.setup('--replace')
+        (self.home / '.zshrc').unlink()
+        (self.home / '.zshrc').write_text('second')
+        self.setup('--replace')
+        backups = list((self.home / '.local/state/dotfiles/backups').iterdir())
+        self.assertEqual(len(backups), 2)
+        self.assertEqual({(p / '.zshrc').read_text() for p in backups}, {'first', 'second'})
+
+    def test_directory_conflict_is_preserved(self):
+        (self.home / '.zshrc').mkdir()
+        (self.home / '.zshrc/custom').write_text('keep')
+        self.setup('--replace')
+        backups = list((self.home / '.local/state/dotfiles/backups').iterdir())
+        self.assertEqual((backups[0] / '.zshrc/custom').read_text(), 'keep')
+
+    def test_parent_symlink_is_not_traversed(self):
+        outside = self.base / 'outside'
+        outside.mkdir()
+        (self.home / '.config').symlink_to(outside, target_is_directory=True)
+        self.setup('--replace', ok=False)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_backup_parent_symlink_is_not_traversed(self):
+        outside = self.base / 'outside'
+        outside.mkdir()
+        (self.home / '.local').mkdir()
+        (self.home / '.local/state').symlink_to(outside, target_is_directory=True)
+        self.setup('--replace', ok=False)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_regular_parent_is_not_overwritten(self):
+        (self.home / '.config').write_text('keep')
+        self.setup('--replace', ok=False)
+        self.assertEqual((self.home / '.config').read_text(), 'keep')
+
+    def test_missing_sources_fail_before_changes(self):
+        for path in ['config/shared/zshrc', 'platform/linux.zsh', 'machines/generic.zsh']:
+            p = self.repo / path
+            data = p.read_text()
+            p.unlink()  # Only this test-owned copy is removed.
+            self.assertIn('Missing', self.setup(ok=False).stderr)
+            self.assertEqual(snapshot(self.home), {})
+            p.write_text(data)
+
+    def test_missing_library_fails(self):
+        (self.repo / 'lib/setup.sh').unlink()
+        self.assertIn('Missing lib/setup.sh', self.setup(ok=False).stderr)
+        self.assertEqual(snapshot(self.home), {})
+
+    def test_checkout_inside_managed_target_is_rejected(self):
+        destination = self.home / '.local/share/dotfiles'
+        destination.parent.mkdir(parents=True)
+        shutil.move(str(self.repo), destination)
+        self.repo = destination
+        before = snapshot(self.home)
+        self.assertIn('inside managed target', self.setup('--replace', ok=False).stderr)
+        self.assertEqual(snapshot(self.home), before)
+
+    def test_missing_detection_script_fails(self):
+        (self.repo / 'platform/detect.sh').unlink()
+        self.assertIn('Missing platform/detect.sh', self.setup(ok=False).stderr)
+        self.assertEqual(snapshot(self.home), {})
+
+    def test_legacy_home_worktree_is_rejected(self):
+        shutil.rmtree(self.repo / '.git')  # Only our temporary empty Git repository.
+        self.assertIn('conventional clone', self.setup(ok=False).stderr)
+        self.assertEqual(snapshot(self.home), {})
+
+    def test_invalid_arguments(self):
+        for args in [('--machine',), ('--oops',), ('--machine', '../../bad'),
+                     ('--profile', 'bad'), ('--machine', 'macos')]:
+            self.setup(*args, ok=False)
+        self.assertEqual(snapshot(self.home), {})
+
+    def test_callisto_is_headless(self):
+        self.setup('--machine', 'callisto', '--dry-run')
+        self.setup('--machine', 'callisto', '--profile', 'desktop', ok=False)
+        self.fake_platform(wsl='2')
+        self.setup('--machine', 'callisto', ok=False)
+
+    def test_somnambulist_requires_wsl2(self):
+        self.setup('--machine', 'somnambulist', ok=False)
+        self.fake_platform(wsl='1')
+        self.setup('--machine', 'somnambulist', ok=False)
+        self.fake_platform(wsl='2')
+        self.setup('--machine', 'somnambulist')
+        self.assertTrue((self.home / '.config/dotfiles/machine.zsh').is_symlink())
+        self.setup('--profile', 'desktop', ok=False)
+
+    def test_work_requires_confirmation(self):
+        self.setup('--machine', 'medina-station', ok=False)
+        self.setup('--machine', 'medina-station', '--confirm-work-os', 'macos', '--profile', 'headless', ok=False)
+        self.setup('--machine', 'medina-station', '--confirm-work-os', 'linux', '--profile', 'headless', '--dry-run')
+
+    def test_local_overrides_are_never_replaced(self):
+        local = self.home / '.config/dotfiles'
+        local.mkdir(parents=True)
+        (local / 'local.zsh').write_text('export DOTFILES_LOCAL_MARKER=yes\n')
+        (local / 'tmux.local.conf').write_text('set -g status-left local\n')
+        self.setup('--replace')
+        self.assertEqual((local / 'local.zsh').read_text(), 'export DOTFILES_LOCAL_MARKER=yes\n')
+        self.assertEqual((local / 'tmux.local.conf').read_text(), 'set -g status-left local\n')
+        if ZSH:
+            result = self.shell('test "$DOTFILES_LOCAL_MARKER" = yes')
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(ZSH, 'zsh unavailable; config loading not verified')
+    def test_shell_loads_without_plugins_and_native_df_survives(self):
+        self.setup()
+        result = self.shell('''
+            (( ! $+aliases[df] && ! $+functions[df] )) || exit 2
+            [[ $(whence -p df) = /* ]] || exit 3
+            df -P / >/dev/null || exit 4
+            [[ $(dtf rev-parse --show-toplevel) = "$DOTFILES_ROOT" ]] || exit 5
+            [[ $EDITOR = nvim ]] || exit 6
+            source "$HOME/.zshrc"
+            [[ ":$PATH:" != *":$HOME/.local/bin:$HOME/.local/bin:"* ]] || exit 7
+        ''')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stderr, '')
+
+    @unittest.skipUnless(ZSH, 'zsh unavailable')
+    def test_callisto_helpers_load(self):
+        self.setup('--machine', 'callisto')
+        result = self.shell('[[ $DOTFILES_MACHINE = callisto ]] && (( $+functions[serve] && $+functions[jlog] ))')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(ZSH, 'zsh unavailable')
+    def test_legacy_helper_aliases_do_not_break_reload(self):
+        self.setup()
+        result = self.shell('alias dtf-test=false; alias dtf-quick-commit=false; '
+                            'source "$HOME/.zshrc"; '
+                            '(( $+functions[dtf-test] && $+functions[dtf-quick-commit] ))')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, '')
+
+    @unittest.skipUnless(ZSH, 'zsh unavailable')
+    def test_macos_shell_layer_loads(self):
+        self.fake_platform('macos', 'macos')
+        self.setup('--machine', 'macos')
+        result = self.shell('[[ $aliases[ls] = "ls -G" && $DOTFILES_MACHINE = macos ]]')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_default_never_invokes_network_or_privilege_commands(self):
+        bin_dir = self.base / 'bin'
+        bin_dir.mkdir()
+        for name in ['sudo', 'curl', 'brew', 'apt-get', 'pacman', 'git', 'systemctl', 'chsh']:
+            script = bin_dir / name
+            script.write_text('#!/bin/sh\nprintf "unexpected command\\n" >&2\nexit 99\n')
+            script.chmod(0o755)
+        self.env['PATH'] = str(bin_dir) + os.pathsep + self.env['PATH']
+        self.setup()
+        self.setup('--dry-run')
+
+    def test_plugin_dry_run_never_clones(self):
+        before = snapshot(self.home)
+        result = self.setup('--install-plugins', '--dry-run')
+        self.assertIn('CLONE', result.stdout)
+        self.assertEqual(snapshot(self.home), before)
+
+    def test_plugin_install_is_opt_in_and_never_pulls(self):
+        bin_dir = self.base / 'bin'
+        bin_dir.mkdir()
+        script = bin_dir / 'git'
+        script.write_text('#!/bin/sh\n[ "$1" = clone ] || exit 99\n'
+                          'for arg do destination=$arg; done\nmkdir -p "$destination/.git"\n')
+        script.chmod(0o755)
+        self.env['PATH'] = str(bin_dir) + os.pathsep + self.env['PATH']
+        self.setup('--install-plugins')
+        self.assertTrue((self.home / '.tmux/plugins/tpm/.git').is_dir())
+        self.assertTrue((self.home / '.zsh/fzf-tab/.git').is_dir())
+        before = snapshot(self.home)
+        self.setup('--install-plugins')
+        self.assertEqual(snapshot(self.home), before)
+
+    def test_plugin_conflict_blocks_all_changes(self):
+        path = self.home / '.zsh/zsh-autosuggestions'
+        path.mkdir(parents=True)
+        before = snapshot(self.home)
+        self.setup('--install-plugins', ok=False)
+        self.assertEqual(snapshot(self.home), before)
+
+    def test_headless_packages_have_no_desktop_packages(self):
+        bin_dir = self.base / 'bin'
+        bin_dir.mkdir()
+        for name in ['apt-get', 'pacman', 'brew']:
+            script = bin_dir / name
+            script.write_text('#!/bin/sh\nexit 99\n')
+            script.chmod(0o755)
+        self.env['PATH'] = str(bin_dir) + os.pathsep + self.env['PATH']
+        for os_name, distro in [('linux', 'ubuntu'), ('linux', 'arch'), ('macos', 'macos')]:
+            self.fake_platform(os_name, distro)
+            result = self.setup('--install-packages', '--dry-run')
+            for name in ['ghostty', 'i3-wm', 'karabiner-elements', 'scrcpy', 'slack']:
+                self.assertNotIn(name, result.stdout)
+        self.assertEqual(snapshot(self.home), {})
+
+    def test_requested_package_commands_use_reviewed_arguments(self):
+        bin_dir = self.base / 'bin'
+        bin_dir.mkdir()
+        log = self.base / 'commands.log'
+        self.env['COMMAND_LOG'] = str(log)
+        for name in ['apt-get', 'sudo']:
+            script = bin_dir / name
+            script.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$COMMAND_LOG"\n')
+            script.chmod(0o755)
+        self.env['PATH'] = str(bin_dir) + os.pathsep + self.env['PATH']
+        self.setup('--install-packages', '--dry-run')
+        self.assertFalse(log.exists())
+        self.setup('--install-packages')
+        commands = log.read_text()
+        self.assertIn('apt-get update', commands)
+        self.assertIn('apt-get install git curl zsh tmux', commands)
+        self.assertNotIn('ghostty', commands)
+
+    def test_missing_package_manifest_blocks_all_changes(self):
+        (self.repo / 'platform/packages/ubuntu.txt').unlink()
+        self.setup('--install-packages', ok=False)
+        self.assertEqual(snapshot(self.home), {})
+
+    def test_unknown_distro_config_only(self):
+        self.fake_platform(distro='unknown')
+        self.setup('--dry-run')
+        self.setup('--install-packages', '--dry-run', ok=False)
+        self.assertEqual(snapshot(self.home), {})
+
+    def test_desktop_links_are_explicit(self):
+        self.fake_platform(distro='arch')
+        for path in ['.config/i3', '.config/ghostty']:
+            p = self.repo / path
+            p.mkdir(parents=True)
+            (p / 'config').write_text('# fixture\n')
+        self.setup('--machine', 'behemoth', '--profile', 'desktop')
+        self.assertTrue((self.home / '.config/i3').is_symlink())
+        self.assertTrue((self.home / '.config/ghostty').is_symlink())
+
+    @unittest.skipUnless(TMUX, 'tmux unavailable; loading not verified')
+    def test_tmux_loads_in_isolated_server(self):
+        self.setup()
+        # -S isolates the socket; no active user's server or plugins are touched.
+        sock = str(self.base / 'tmux.sock')
+        command = [TMUX, '-S', sock, '-f', str(self.home / '.tmux.conf')]
+        try:
+            result = run(command + ['new-session', '-d', '-s', 'check', 'sleep 30'], self.env)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stderr, '')
+            errors = run([TMUX, '-S', sock, 'show-messages'], self.env)
+            self.assertNotIn('invalid', errors.stdout.lower())
+            result = run([TMUX, '-S', sock, 'show-options', '-gv', 'prefix'], self.env)
+            self.assertEqual(result.stdout.strip(), 'C-Space')
+        finally:
+            run([TMUX, '-S', sock, 'kill-server'], self.env)
+
+
+class DetectionTests(unittest.TestCase):
+    def detect(self, system, release, data):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / 'os-release'
+            p.write_text(data)
+            env = dict(BASE_ENV, HOME=tmp)
+            return run([BASH, '-c', '. "$1"; detect_platform "$2" "$3" "$4" || exit; '
+                        'printf "%s:%s:%s" "$DF_OS" "$DF_DISTRO" "$DF_WSL"',
+                        'test', str(ROOT / 'platform/detect.sh'), system, release, str(p)], env)
+
+    def test_arch(self):
+        self.assertEqual(self.detect('Linux', '6.18-arch', 'ID=arch\n').stdout, 'linux:arch:none')
+
+    def test_endeavouros(self):
+        self.assertEqual(self.detect('Linux', '6.18', 'ID="endeavouros"\nID_LIKE=arch\n').stdout, 'linux:endeavouros:none')
+
+    def test_ubuntu_native(self):
+        self.assertEqual(self.detect('Linux', '6.8-generic', 'ID=ubuntu\n').stdout, 'linux:ubuntu:none')
+
+    def test_wsl2(self):
+        for release in ['5.15.153.1-microsoft-standard-WSL2', '6.6.87.2-microsoft-standard']:
+            self.assertEqual(self.detect('Linux', release, 'ID=ubuntu\n').stdout, 'linux:ubuntu:2')
+
+    def test_wsl1(self):
+        self.assertEqual(self.detect('Linux', '4.4.0-19041-Microsoft', 'ID=ubuntu\n').stdout, 'linux:ubuntu:1')
+
+    def test_macos(self):
+        self.assertEqual(self.detect('Darwin', '24.0', '').stdout, 'macos:macos:none')
+
+    def test_unknown_and_unsupported(self):
+        self.assertEqual(self.detect('Linux', '6.8', '').stdout, 'linux:unknown:none')
+        self.assertNotEqual(self.detect('FreeBSD', '14.0', '').returncode, 0)
+
+    def test_os_release_is_data_not_code(self):
+        result = self.detect('Linux', '6.8', 'ID=ubuntu\nOTHER=$(echo UNSAFE >&2)\n')
+        self.assertEqual(result.stderr, '')
+        self.assertEqual(result.stdout, 'linux:ubuntu:none')
+
+
+class SourceChecks(unittest.TestCase):
+    def test_shell_syntax(self):
+        paths = [ROOT / 'setup.sh', ROOT / 'lib/setup.sh', ROOT / 'platform/detect.sh',
+                 ROOT / 'tests/run.sh', ROOT / '.dotfiles/test.sh', ROOT / 'tools/git-hooks/pre-commit']
+        paths += list((ROOT / 'legacy').glob('*setup.sh'))
+        paths += list((ROOT / '.dotfiles').glob('*setup.sh'))
+        for p in paths:
+            result = run([BASH, '-n', str(p)], BASE_ENV)
+            self.assertEqual(result.returncode, 0, str(p) + result.stderr)
+        if not ZSH:
+            self.skipTest('bash syntax passed; zsh unavailable')
+        zpaths = [ROOT / 'config/shared/zshrc', ROOT / 'config/shared/zshenv',
+                  ROOT / '.dotfiles/.zshrc', ROOT / '.dotfiles/.zshenv',
+                  ROOT / 'config/optional/helpers.zsh']
+        zpaths += list((ROOT / 'platform').glob('*.zsh')) + list((ROOT / 'machines').glob('*.zsh'))
+        for p in zpaths:
+            result = run([ZSH, '-n', str(p)], BASE_ENV)
+            self.assertEqual(result.returncode, 0, str(p) + result.stderr)
+
+    def test_config_regressions(self):
+        aerospace = (ROOT / '.aerospace.toml').read_text()
+        self.assertNotRegex(aerospace, r'(?m)^\s*alt-(left|right)\s*=')
+        shared = (ROOT / 'config/shared/zshrc').read_text()
+        self.assertIn('bindkey "^[[1;5D" backward-word', shared)
+        self.assertIn('bindkey "^[[1;5C" forward-word', shared)
+        ghostty = (ROOT / '.config/ghostty/config').read_text()
+        for binding in ['ctrl+v=paste_from_clipboard', 'ctrl+shift+v=paste_from_clipboard',
+                        'ctrl+shift+c=copy_to_clipboard']:
+            self.assertIn('keybind = ' + binding, ghostty)
+        karabiner = json.loads((ROOT / '.config/karabiner/assets/complex_modifications/linux-ctrl-swap.json').read_text())
+        self.assertIn('mitchellh', json.dumps(karabiner))
+
+    def test_managed_runtime_does_not_load_env_or_private_profiles(self):
+        paths = [ROOT / 'setup.sh', ROOT / 'lib/setup.sh']
+        for directory in ['config/shared', 'platform', 'machines']:
+            paths += [p for p in (ROOT / directory).rglob('*') if p.is_file()]
+        for p in paths:
+            content = p.read_text()
+            self.assertNotIn('.env', content, str(p))
+            self.assertNotIn('.vidangel.zsh', content, str(p))
+            self.assertNotRegex(content, r'(?m)^\s*alias\s+df=')
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

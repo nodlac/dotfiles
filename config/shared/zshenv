@@ -1,0 +1,5 @@
+# Loaded for every zsh invocation. No subprocesses, secrets or optional scripts.
+typeset -U path PATH
+path=("$HOME/.local/bin" "$HOME/bin" "$HOME/.npm-global/bin" "$HOME/.opencode/bin" $path)
+[[ -d "$HOME/.local/share/pi-node/current/bin" ]] && path=("$HOME/.local/share/pi-node/current/bin" $path)
+export EDITOR=nvim VISUAL=nvim
