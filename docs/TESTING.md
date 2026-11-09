@@ -44,7 +44,7 @@ authorized security review and must never be printed in CI logs.
 
 ## Current suite
 
-Local implementation result: **50 tests passed, no skips**, on Behemoth Linux
+Local implementation result: **52 tests passed, no skips**, on Behemoth Linux
 using disposable homes (zsh and tmux loading checks included). Workflow YAML
 also parsed with Ruby's YAML library, and `git diff --check` passed. These are
 not claims of actual machine migration or package-manager installation testing.
@@ -76,6 +76,31 @@ missing optional plugins, local overrides, and isolated tmux configuration loadi
 Package/network commands are not actually run by tests. Paths with spaces are
 included in fixtures.
 
+## HOME-dependent tmux launchers
+
+Some machines have a `tmux` shell launcher that executes a versioned binary under
+`$HOME/.local/share`. The test deliberately changes HOME, so that launcher cannot
+find its payload. This is a validator-launch failure, not evidence that the tmux
+config parsed successfully or failed. Never restore the live HOME to make the test
+pass: that could activate real plugins and local configuration.
+
+Provide the absolute path to the actual executable instead. For Callisto's
+reported tmux 3.5a installation, **if this executable exists**:
+
+```sh
+test -x "$HOME/.local/share/tmux-3.5a/bin/tmux"
+DOTFILES_TEST_TMUX="$HOME/.local/share/tmux-3.5a/bin/tmux" bash tests/run.sh
+```
+
+The override is used only by the tests, not by setup or your shell. It does not
+change HOME, PATH, installed programs, or the active tmux server. If testing a
+different binary (such as `/usr/bin/tmux`), record which version was tested; that
+does not also verify a separate local build. An invalid override or broken
+launcher **fails** with instructions rather than silently skipping or falling
+back to a different tmux. The selected executable/version is printed in the test
+output. Regression fixtures reproduce the HOME-dependent launcher failure and
+verify a direct payload can be probed without changing the isolated HOME.
+
 ## CI and actual machine validation
 
 GitHub Actions runs Ubuntu 24.04/latest and macOS runner tests plus an Arch Linux
@@ -84,7 +109,7 @@ container check. Initial CI caught insecure preinstalled completion paths causin
 to ignore insecure paths, not `-u` to trust them. A writable-completion-path
 regression verifies it stays unloaded and startup emits no error.
 
- CI does not run setup against a runner's real home, install the dotfiles
+CI does not run setup against a runner's real home, install the dotfiles
 package manifests, provision servers, or validate desktop input integration.
 Actual machine migration remains gated on owner review and the PLATFORMS.md
 checklist. Linux-host fixtures for WSL/macOS are not actual WSL/macOS deployment

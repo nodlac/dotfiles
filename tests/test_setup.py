@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -12,7 +13,9 @@ ROOT = Path(__file__).resolve().parents[1]
 # Explicitly exercise Apple's system Bash 3.2 on macOS, even if brew has Bash 5.
 BASH = '/bin/bash' if Path('/bin/bash').is_file() else shutil.which('bash')
 ZSH = shutil.which('zsh')
-TMUX = shutil.which('tmux')
+# HOME-dependent launchers cannot locate their payload in an isolated test home.
+# Allow an explicit real executable; never "fix" that by restoring the live HOME.
+TMUX = os.environ.get('DOTFILES_TEST_TMUX') or shutil.which('tmux')
 GIT = shutil.which('git')
 BASE_ENV = {
     'PATH': os.pathsep.join(dict.fromkeys([str(Path(BASH).parent), '/usr/local/bin', '/usr/bin', '/bin'])),
@@ -24,6 +27,21 @@ BASE_ENV = {
 def run(args, env, **kwargs):
     return subprocess.run(args, env=env, text=True, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE, timeout=60, **kwargs)
+
+
+def probe_tmux(binary, env):
+    guidance = ('Set DOTFILES_TEST_TMUX to the absolute path of the real tmux binary, '
+                'not a HOME-dependent launcher. Tests must retain their isolated HOME.')
+    if not Path(binary).is_absolute():
+        raise AssertionError(guidance)
+    try:
+        result = run([binary, '-V'], env)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AssertionError(f'Cannot launch tmux validator {binary}: {error}\n{guidance}') from error
+    if result.returncode != 0 or not result.stdout.startswith('tmux '):
+        raise AssertionError(f'tmux validator {binary} failed before config loading:\n'
+                             f'{result.stdout}{result.stderr}\n{guidance}')
+    return result.stdout.strip()
 
 
 def snapshot(home):
@@ -403,8 +421,30 @@ class SetupTests(unittest.TestCase):
         self.assertTrue((self.home / '.config/i3').is_symlink())
         self.assertTrue((self.home / '.config/ghostty').is_symlink())
 
+    def test_tmux_probe_handles_home_dependent_launchers(self):
+        payload = self.base / 'real home/.local/share/tmux-3.5a/bin/tmux'
+        payload.parent.mkdir(parents=True)
+        payload.write_text('#!/bin/sh\nprintf "tmux 3.5a\\n"\n')
+        payload.chmod(0o755)
+        launcher = self.base / 'tmux-launcher'
+        launcher.write_text('#!/bin/sh\nexec env "$HOME/.local/share/tmux-3.5a/bin/tmux" "$@"\n')
+        launcher.chmod(0o755)
+        before = snapshot(self.home)
+        with self.assertRaisesRegex(AssertionError, 'DOTFILES_TEST_TMUX'):
+            probe_tmux(str(launcher), self.env)
+        self.assertEqual(probe_tmux(str(payload), self.env), 'tmux 3.5a')
+        self.assertEqual(snapshot(self.home), before)
+        self.assertEqual(self.env['HOME'], str(self.home))
+
+    def test_invalid_tmux_override_fails_instead_of_skipping(self):
+        for binary in ['relative/tmux', str(self.base / 'missing-tmux')]:
+            with self.assertRaisesRegex(AssertionError, 'DOTFILES_TEST_TMUX'):
+                probe_tmux(binary, self.env)
+
     @unittest.skipUnless(TMUX, 'tmux unavailable; loading not verified')
     def test_tmux_loads_in_isolated_server(self):
+        version = probe_tmux(TMUX, self.env)
+        print(f'\nValidating {TMUX} ({version}) with isolated HOME', file=sys.stderr)
         self.setup()
         # -S isolates the socket; no active user's server or plugins are touched.
         sock = str(self.base / 'tmux.sock')
