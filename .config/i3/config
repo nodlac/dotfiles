@@ -194,7 +194,7 @@ bindsym $mod+Shift+c reload
 # restart i3 inplace (preserves your layout/session, can be used to update i3)
 bindsym $mod+Shift+r restart
 
-# keybinding in fancy rofi (automated):
+# keybinding in fancy rofi (automagicd):
 bindsym F1 exec --no-startup-id ~/.config/i3/scripts/keyhint-2
 # alternative
 # keybinding list in editor:
@@ -326,7 +326,7 @@ set $ws5 "5:"
 set $ws6 "6"
 set $ws7 "7"
 set $ws8 "8"
-set $ws9 "9"
+set $ws9 "9:"
 set $ws10 "10"
 
 # use workspaces on different displays:
@@ -342,6 +342,7 @@ set $ws10 "10"
 assign [class="Thunar"] $ws1
 assign [class="ghostty"] $ws2
 assign [class="(?i)brave"] $ws3
+assign [class="(?i)slack"] $ws9
 # assign [class="thunderbird"] $ws4
 # assign [class="TelegramDesktop"] $ws5
 
@@ -622,7 +623,6 @@ exec_always --no-startup-id bash -c 'source ~/.env && [ "$KEYBOARD_TYPE" = "mac"
 #####################################
 bindsym $mod+s exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t settings || tmux new-session -d -s settings && tmux switch-client -t settings"
 bindsym $mod+n exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t notes || tmux new-session -d -s notes && tmux switch-client -t notes"
-bindsym $mod+g exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t workout-planning || tmux new-session -d -s workout-planning && tmux switch-client -t workout-planning"
 bindsym $mod+a exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t AOC || tmux new-session -d -s AOC && tmux switch-client -t AOC"
-bindsym $mod+b exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t BD || tmux new-session -d -s BD && tmux switch-client -t BD"
-bindsym $mod+p exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t POS || tmux new-session -d -s POS && tmux switch-client -t POS"
+bindsym $mod+p exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t callisto || tmux new-session -d -s callisto && tmux switch-client -t callisto
+bindsym $mod+y exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t yerba-magic || tmux new-session -d -s yerba-mate && tmux switch-client -t yerba-mate"
