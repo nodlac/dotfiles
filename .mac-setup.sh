@@ -1,0 +1,1 @@
+/Users/medina_station/.dotfiles/.mac-setup.sh
