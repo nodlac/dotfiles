@@ -12,13 +12,15 @@ absolute home path.
 New installs therefore use a conventional clone plus explicit links. This is a
 **proposal implemented for fresh checkouts**, not permission to convert any live
 machine. No script rewrites the old repository, checks out a branch, merges,
-commits, pushes, deletes configuration, or migrates credentials. The old `.dotfiles`
-files are compatibility loaders; new installs do not depend on them.
+commits, pushes, deletes configuration, or migrates credentials. Obsolete
+installers/loaders and root config symlinks have been removed from this checkout;
+original versions remain in Git history (see FEATURE_PARITY.md).
 
 Do not fetch/checkout this refactor into `$HOME` to migrate. A normal checkout in a
-separate directory allows review without touching the old worktree. Root symlinks
-remain tracked for historical compatibility; they do not install themselves into
-home when using a normal clone.
+separate directory allows review without touching the old worktree. Repository
+cleanup removes files from the new checkout only, never from the old Git
+directory or migration backups. Already migrated machines link directly to
+`config/shared/` and are not affected by removal of the compatibility paths.
 
 ## Before each migration (owner approval required)
 
@@ -30,7 +32,7 @@ home when using a normal clone.
 
    ```sh
    old="$HOME/.dotfiles"
-   git --git-dir="$old" --work-tree="$HOME" status --short --branch
+   git -C "$HOME" --git-dir="$old" --work-tree="$HOME" status --short --branch
    git --git-dir="$old" branch -avv
    git --git-dir="$old" log -5 --oneline
    git --git-dir="$old" config --get core.bare
@@ -64,8 +66,8 @@ home when using a normal clone.
 3. If satisfied, run the same setup without dry-run. A conflict still refuses
    activation. Only add `--replace` after approving backup + replacement of each
    listed conflict. No files are deleted; objects move intact into unique backups.
-4. Open a **new** zsh (not merely a nested continuation of an old alias-heavy
-   shell). Check `dtf status`, `whence df`, `df -P /`, PATH, completion, history,
+4. Open a **new zsh process**, rather than just sourcing the config into an
+   old alias-heavy shell. Check `dtf status`, `whence df`, `df -P /`, PATH, completion, history,
    expected machine helpers and optional desktop behavior. Verify `dtf` points
    at the new checkout, not the old home worktree.
 5. Validate tmux with a new isolated server before explicitly reloading the active
@@ -78,11 +80,27 @@ home when using a normal clone.
    validated and approved retirement. Avoid operating both Git layouts on the
    same linked configuration after migration.
 
-## Callisto: do not assume synchronization
+After activation, the old home-worktree status may show modified shell symlinks
+and deleted files beneath application directories replaced by symlinks. Git does
+not follow directory symlinks. This alone is not evidence that the original files
+were lost; check the approved backups. Do not commit, restore, reset or clean the
+old worktree to make that status disappear.
 
-The known local checkout/pull conflicts involve `.zshrc` and `.mac-setup.sh`, and
-its local branch/merge/rebase state has **not** been independently checked. The
-remote refs observed during this work were:
+## Callisto: original risk and owner-reported migration
+
+The original checkout/pull conflicts involved `.zshrc` and `.mac-setup.sh`. The
+initial audit did not have access to Callisto's local state. The owner subsequently
+provided output showing the old checkout on clean `main` at `575d0e8`, with local
+`server` and `origin/server` both at `bbd8f35`, and no unmerged entries. The owner
+then reported passing isolated tests with the explicit tmux binary/runtime options
+and confirmed the new `.zshrc` link, checkout-scoped `dtf`, native `df`, clean
+feature branch, and working tmux 3.5a launcher.
+
+These are owner-reported observations, not remote inspection or proof of service,
+backup or credential integration. Preserve `~/.dotfiles`, its branches and
+`~/.dotfiles.bak`; backup contents and server-specific workflows remain unverified.
+Recheck the actual machine state before further changes. The remote refs observed
+at the original audit were:
 
 - `main`: `575d0e8292aeb6b0cd920126cc41334eca33ee72`
 - `server`: `bbd8f35cac586965bceef97c5cc5d40c86715e5d`

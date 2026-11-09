@@ -16,7 +16,8 @@ Links shared shell/tmux, Ghostty and i3. Desktop packages are separate from CLI
 packages. AUR packages (`brave-bin`, `keyd`) and any AUR helper are intentionally
 not automatically installed; use your approved AUR workflow. Keyd remapping,
 Docker/NetworkManager/Bluetooth service activation and editor alternatives are
-separate manual tasks retained in the legacy recipes.
+separate manual tasks; the [feature inventory](FEATURE_PARITY.md) points to
+historical recipes in Git history.
 
 ## Callisto — native Ubuntu Server, headless
 
@@ -54,9 +55,10 @@ Uses BSD-compatible `ls -G`, discovers Homebrew under `/opt/homebrew` or
 vendor instructions before opting into package installation. Desktop selection
 links Ghostty, Aerospace and the Karabiner rule asset, **not** the live
 `karabiner.json`. Approve driver/Input Monitoring permissions and enable the rule
-manually. Key repeat, caps-to-Escape, Spotlight and hotkey defaults are retained
-as reference recipes, never silently changed. Neither `chsh` nor an Intel/ARM
-shell path is hardcoded by bootstrap.
+manually. Key repeat, caps-to-Escape, Spotlight and hotkey defaults are documented
+in the feature inventory, with historical recipes in Git history; they are never
+silently changed. Neither `chsh` nor an Intel/ARM shell path is hardcoded by
+bootstrap.
 
 ## Medina Station — verified macOS (Apple Silicon) desktop
 
@@ -73,8 +75,7 @@ or role is never assumed. Credential loading (`~/.env`), the work shell profile,
 `~/tools` on PATH and the tmux todo header live in the user-owned
 `~/.config/dotfiles/local.zsh` / `tmux.local.conf`, outside the repository.
 
-Desktop setup is
-currently implemented for macOS and native Arch/EndeavourOS only; Ubuntu desktop
+Desktop setup is currently implemented for macOS and native Arch/EndeavourOS only; Ubuntu desktop
 and WSL desktop are rejected. Put approved work overrides in the user-owned
 `~/.config/dotfiles/local.zsh` / `tmux.local.conf`. Old private profiles and the
 todo/notes feature are not automatically sourced or inspected.
@@ -94,10 +95,20 @@ into `~/.local/state/dotfiles/backups/`, and a fresh zsh plus an isolated tmux
 server (`tmux -L migration-check`) were verified — native `df` intact, `dtf` on
 the new checkout, work helpers loading from `local.zsh`. The old `~/.dotfiles`
 Git directory, branches and the live tmux server were left untouched.
+This verification was recorded before the repository cleanup, not a rerun of the
+post-cleanup suite on Medina Station.
 
-No other target machine was migrated. Local automated tests ran on the
-Behemoth Linux host in disposable homes; detection fixtures simulate other
-platforms. GitHub CI results must be checked on the PR. macOS CI is a runner test,
-not verification of a real user Mac. Callisto, real WSL2,
-keyboard integration, GUI apps, package availability and service behavior require
-owner-approved machine-by-machine smoke tests after review.
+- **Behemoth:** its canonical shell/tmux and Ghostty/i3 links were verified locally
+  after the owner applied setup. Desktop input/app behavior and service workflows
+  have not been independently verified.
+- **Callisto:** the owner reported passing isolated tests with its bundled tmux
+  binary/runtime, then confirmed the canonical shell link, checkout-scoped `dtf`,
+  native `df` and working tmux 3.5a. Backups and server workflows remain unverified.
+- **Personal MacBook and Somnambulist/WSL2:** no machine-validation output has been
+  provided. Their actual deployments remain pending.
+
+Automated tests run on Behemoth in disposable homes, plus Ubuntu/macOS CI runners
+and an Arch Linux container. CI checks are separate from the recorded Medina
+Station deployment, and detection fixtures are not a real WSL2 deployment.
+Inspect current PR checks; package availability, GUI/input integration and
+services need separate owner-approved machine smoke tests.
