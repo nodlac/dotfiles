@@ -276,6 +276,19 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(result.stderr, '')
 
     @unittest.skipUnless(ZSH, 'zsh unavailable')
+    def test_insecure_completion_paths_are_ignored_without_prompting(self):
+        self.setup()
+        insecure = self.base / 'insecure-completions'
+        insecure.mkdir(mode=0o777)
+        insecure.chmod(0o777)
+        (insecure / '_unsafe').write_text('#compdef unsafecommand\n_arguments "*::args:->args"\n')
+        self.env['INSECURE_FPATH'] = str(insecure)
+        result = self.shell('fpath=("$INSECURE_FPATH" $fpath); source "$HOME/.zshrc"; '
+                            '[[ -z ${_comps[unsafecommand]-} ]]')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, '')
+
+    @unittest.skipUnless(ZSH, 'zsh unavailable')
     def test_callisto_helpers_load(self):
         self.setup('--machine', 'callisto')
         result = self.shell('[[ $DOTFILES_MACHINE = callisto ]] && (( $+functions[serve] && $+functions[jlog] ))')

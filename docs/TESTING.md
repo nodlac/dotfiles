@@ -44,7 +44,7 @@ authorized security review and must never be printed in CI logs.
 
 ## Current suite
 
-Local implementation result: **49 tests passed, no skips**, on Behemoth Linux
+Local implementation result: **50 tests passed, no skips**, on Behemoth Linux
 using disposable homes (zsh and tmux loading checks included). Workflow YAML
 also parsed with Ruby's YAML library, and `git diff --check` passed. These are
 not claims of actual machine migration or package-manager installation testing.
@@ -78,8 +78,13 @@ included in fixtures.
 
 ## CI and actual machine validation
 
-GitHub Actions runs Linux and macOS runner tests plus an Arch Linux container
-check. CI does not run setup against a runner's real home, install the dotfiles
+GitHub Actions runs Ubuntu 24.04/latest and macOS runner tests plus an Arch Linux
+container check. Initial CI caught insecure preinstalled completion paths causing
+`compinit` to prompt without a terminal on Ubuntu. Startup now uses `compinit -i`
+to ignore insecure paths, not `-u` to trust them. A writable-completion-path
+regression verifies it stays unloaded and startup emits no error.
+
+ CI does not run setup against a runner's real home, install the dotfiles
 package manifests, provision servers, or validate desktop input integration.
 Actual machine migration remains gated on owner review and the PLATFORMS.md
 checklist. Linux-host fixtures for WSL/macOS are not actual WSL/macOS deployment

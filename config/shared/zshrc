@@ -43,7 +43,9 @@ for plugin in "$HOME/.zsh/zsh-completions/src"; do
     [[ ! -d "$plugin" ]] || fpath=("$plugin" $fpath)
 done
 autoload -Uz compinit
-compinit
+# Ignore insecure completion paths rather than trusting them (-u) or prompting
+# on headless/non-TTY shells. Secure completions still load normally.
+compinit -i
 for plugin in \
     "$HOME/.zsh/zsh-history-substring-search/zsh-history-substring-search.zsh" \
     "$HOME/.zsh/zsh-autosuggestions/zsh-autosuggestions.zsh" \
