@@ -69,9 +69,9 @@ say "regressions"
 # Grabbing alt-arrow at WM level starves the terminal's word jump. See 7aa5cff.
 want "aerospace leaves alt-left/right free" .aerospace.toml '^\s*alt-(left|right)\s*=' invert
 want "zsh word jump on ctrl+arrow"          .dotfiles/.zshrc '^bindkey "\^\[\[1;5[CD]"'
-want "ghostty pastes on ctrl+v"             .config/ghostty/config.ghostty '^keybind = ctrl\+v=paste_from_clipboard'
-want "ghostty pastes on ctrl+shift+v"       .config/ghostty/config.ghostty '^keybind = ctrl\+shift\+v=paste_from_clipboard'
-want "ghostty copies on ctrl+shift+c"       .config/ghostty/config.ghostty '^keybind = ctrl\+shift\+c=copy_to_clipboard'
+want "ghostty pastes on ctrl+v"             .config/ghostty/config '^keybind = ctrl\+v=paste_from_clipboard'
+want "ghostty pastes on ctrl+shift+v"       .config/ghostty/config '^keybind = ctrl\+shift\+v=paste_from_clipboard'
+want "ghostty copies on ctrl+shift+c"       .config/ghostty/config '^keybind = ctrl\+shift\+c=copy_to_clipboard'
 # Swapping ctrl/cmd inside a terminal would eat SIGINT and the tmux prefix.
 want "karabiner swap excludes ghostty"      .config/karabiner/assets/complex_modifications/linux-ctrl-swap.json 'mitchellh\\\\.ghostty'
 want "caps lock is escape (mac)"            .dotfiles/.mac-setup.sh '"key_code": "caps_lock"'
