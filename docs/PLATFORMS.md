@@ -58,25 +58,22 @@ manually. Key repeat, caps-to-Escape, Spotlight and hotkey defaults are retained
 as reference recipes, never silently changed. Neither `chsh` nor an Intel/ARM
 shell path is hardcoded by bootstrap.
 
-## Medina Station — OS and requirements not yet verified
+## Medina Station — verified macOS (Apple Silicon) desktop
 
-Do not guess. Confirm these with the owner/IT before activation:
-
-- Actual OS/distribution and WSL status (`./setup.sh --detect`).
-- Whether it is managed by MDM or another configuration system.
-- Approved shell, package sources, desktop apps, work tools and credential-loading
-  policy. No personal machine settings or private notes should be imported.
-- Existing shell/tmux customizations that must remain available.
-
-The machine profile is deliberately empty except for its public identity.
-Activation requires an explicit role and OS confirmation matching detection, e.g.
-**only after confirming a Linux/headless requirement**:
+Verified on the machine itself on 2026-11-09: macOS 26.6.2 arm64, zsh 5.9,
+system Bash 3.2.57, Homebrew tmux 3.6a. Activation command:
 
 ```sh
-./setup.sh --machine medina-station --profile headless --confirm-work-os linux --dry-run
+./setup.sh --machine medina-station --profile desktop --confirm-work-os macos --dry-run
 ```
 
-Use `macos` instead of `linux` only if that is the verified OS. Desktop setup is
+The machine profile is deliberately empty except for its public identity; the
+explicit `--confirm-work-os` + `--profile` requirement stays so a different OS
+or role is never assumed. Credential loading (`~/.env`), the work shell profile,
+`~/tools` on PATH and the tmux todo header live in the user-owned
+`~/.config/dotfiles/local.zsh` / `tmux.local.conf`, outside the repository.
+
+Desktop setup is
 currently implemented for macOS and native Arch/EndeavourOS only; Ubuntu desktop
 and WSL desktop are rejected. Put approved work overrides in the user-owned
 `~/.config/dotfiles/local.zsh` / `tmux.local.conf`. Old private profiles and the
@@ -91,9 +88,16 @@ and validate locally before adding a platform recipe.
 
 ## Actual deployment status
 
-No target machine was migrated by this change. Local automated tests ran on the
+**Medina Station was migrated and smoke-tested on 2026-11-09**: the full suite
+(54 tests) passed locally on macOS/Bash 3.2, the old configs were moved intact
+into `~/.local/state/dotfiles/backups/`, and a fresh zsh plus an isolated tmux
+server (`tmux -L migration-check`) were verified — native `df` intact, `dtf` on
+the new checkout, work helpers loading from `local.zsh`. The old `~/.dotfiles`
+Git directory, branches and the live tmux server were left untouched.
+
+No other target machine was migrated. Local automated tests ran on the
 Behemoth Linux host in disposable homes; detection fixtures simulate other
 platforms. GitHub CI results must be checked on the PR. macOS CI is a runner test,
-not verification of either user's Mac or Medina Station. Callisto, real WSL2,
+not verification of a real user Mac. Callisto, real WSL2,
 keyboard integration, GUI apps, package availability and service behavior require
 owner-approved machine-by-machine smoke tests after review.
