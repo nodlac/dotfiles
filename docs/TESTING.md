@@ -44,7 +44,7 @@ authorized security review and must never be printed in CI logs.
 
 ## Current suite
 
-Local implementation result: **52 tests passed, no skips**, on Behemoth Linux
+Local implementation result: **54 tests passed, no skips**, on Behemoth Linux
 using disposable homes (zsh and tmux loading checks included). Workflow YAML
 also parsed with Ruby's YAML library, and `git diff --check` passed. These are
 not claims of actual machine migration or package-manager installation testing.
@@ -92,14 +92,31 @@ test -x "$HOME/.local/share/tmux-3.5a/bin/tmux"
 DOTFILES_TEST_TMUX="$HOME/.local/share/tmux-3.5a/bin/tmux" bash tests/run.sh
 ```
 
-The override is used only by the tests, not by setup or your shell. It does not
-change HOME, PATH, installed programs, or the active tmux server. If testing a
+If that binary needs bundled shared libraries (Callisto's launcher supplies
+`runtime/libjemalloc.so.2`), provide its known runtime directory explicitly:
+
+```sh
+DOTFILES_TEST_TMUX="$HOME/.local/share/tmux-3.5a/bin/tmux" \
+DOTFILES_TEST_TMUX_LIBRARY_PATH="$HOME/.local/share/tmux-3.5a/runtime" \
+  bash tests/run.sh
+```
+
+The library option is a colon-separated list of absolute, existing directories;
+empty or relative entries fail. It supplies `LD_LIBRARY_PATH` only to the test's
+tmux commands, including version probing and private-server cleanup. It does not
+inherit the user's loader environment, enable `LD_PRELOAD`, or restore the live
+HOME. Point it only at trusted libraries you intend to load.
+
+These overrides are used only by the tests, not by setup or your shell. They do
+not change HOME, PATH, installed programs, or the active tmux server. If testing a
 different binary (such as `/usr/bin/tmux`), record which version was tested; that
 does not also verify a separate local build. An invalid override or broken
 launcher **fails** with instructions rather than silently skipping or falling
 back to a different tmux. The selected executable/version is printed in the test
 output. Regression fixtures reproduce the HOME-dependent launcher failure and
-verify a direct payload can be probed without changing the isolated HOME.
+verify a direct payload can be probed without changing the isolated HOME. Further
+fixtures reproduce a missing bundled-runtime failure and verify the explicit
+library environment is passed without mutating the base fixture environment.
 
 ## CI and actual machine validation
 

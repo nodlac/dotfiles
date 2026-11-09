@@ -16,6 +16,7 @@ ZSH = shutil.which('zsh')
 # HOME-dependent launchers cannot locate their payload in an isolated test home.
 # Allow an explicit real executable; never "fix" that by restoring the live HOME.
 TMUX = os.environ.get('DOTFILES_TEST_TMUX') or shutil.which('tmux')
+TMUX_LIBRARY_PATH = os.environ.get('DOTFILES_TEST_TMUX_LIBRARY_PATH')
 GIT = shutil.which('git')
 BASE_ENV = {
     'PATH': os.pathsep.join(dict.fromkeys([str(Path(BASH).parent), '/usr/local/bin', '/usr/bin', '/bin'])),
@@ -29,9 +30,24 @@ def run(args, env, **kwargs):
                           stderr=subprocess.PIPE, timeout=60, **kwargs)
 
 
+def tmux_runtime_env(env, library_path=None):
+    result = dict(env)
+    if library_path is not None:
+        directories = library_path.split(os.pathsep)
+        if any(not p or not Path(p).is_absolute() or not Path(p).is_dir()
+               for p in directories):
+            raise AssertionError('DOTFILES_TEST_TMUX_LIBRARY_PATH must contain only '
+                                 'absolute, existing library directories (no empty entries).')
+        # Explicit allowlist, not inheritance of the user's loader environment.
+        # Use only for tmux commands; retain the fixture HOME and private socket.
+        result['LD_LIBRARY_PATH'] = library_path
+    return result
+
+
 def probe_tmux(binary, env):
     guidance = ('Set DOTFILES_TEST_TMUX to the absolute path of the real tmux binary, '
-                'not a HOME-dependent launcher. Tests must retain their isolated HOME.')
+                'not a HOME-dependent launcher. For a bundled runtime, also set '
+                'DOTFILES_TEST_TMUX_LIBRARY_PATH. Tests must retain their isolated HOME.')
     if not Path(binary).is_absolute():
         raise AssertionError(guidance)
     try:
@@ -441,24 +457,50 @@ class SetupTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, 'DOTFILES_TEST_TMUX'):
                 probe_tmux(binary, self.env)
 
+    def test_bundled_tmux_runtime_keeps_home_isolated(self):
+        runtime = self.base / 'runtime with spaces'
+        runtime.mkdir()
+        payload = self.base / 'bundled-tmux'
+        payload.write_text('#!/bin/sh\n'
+                           '[ "$LD_LIBRARY_PATH" = "$EXPECTED_RUNTIME" ] || exit 127\n'
+                           'printf "tmux 3.5a\\n"\n')
+        payload.chmod(0o755)
+        base_env = dict(self.env, EXPECTED_RUNTIME=str(runtime))
+        before = dict(base_env)
+        with self.assertRaisesRegex(AssertionError, 'DOTFILES_TEST_TMUX_LIBRARY_PATH'):
+            probe_tmux(str(payload), base_env)
+        runtime_env = tmux_runtime_env(base_env, str(runtime))
+        self.assertEqual(probe_tmux(str(payload), runtime_env), 'tmux 3.5a')
+        self.assertEqual(base_env, before)
+        self.assertEqual(runtime_env['HOME'], str(self.home))
+        self.assertNotIn('LD_PRELOAD', runtime_env)
+
+    def test_invalid_tmux_library_paths_fail(self):
+        for path in ['', '.', 'relative/lib', str(self.base / 'missing'),
+                     str(self.base) + os.pathsep, os.pathsep + str(self.base)]:
+            with self.assertRaisesRegex(AssertionError, 'DOTFILES_TEST_TMUX_LIBRARY_PATH'):
+                tmux_runtime_env(self.env, path)
+        self.assertEqual(tmux_runtime_env(self.env), self.env)
+
     @unittest.skipUnless(TMUX, 'tmux unavailable; loading not verified')
     def test_tmux_loads_in_isolated_server(self):
-        version = probe_tmux(TMUX, self.env)
+        tmux_env = tmux_runtime_env(self.env, TMUX_LIBRARY_PATH)
+        version = probe_tmux(TMUX, tmux_env)
         print(f'\nValidating {TMUX} ({version}) with isolated HOME', file=sys.stderr)
         self.setup()
         # -S isolates the socket; no active user's server or plugins are touched.
         sock = str(self.base / 'tmux.sock')
         command = [TMUX, '-S', sock, '-f', str(self.home / '.tmux.conf')]
         try:
-            result = run(command + ['new-session', '-d', '-s', 'check', 'sleep 30'], self.env)
+            result = run(command + ['new-session', '-d', '-s', 'check', 'sleep 30'], tmux_env)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(result.stderr, '')
-            errors = run([TMUX, '-S', sock, 'show-messages'], self.env)
+            errors = run([TMUX, '-S', sock, 'show-messages'], tmux_env)
             self.assertNotIn('invalid', errors.stdout.lower())
-            result = run([TMUX, '-S', sock, 'show-options', '-gv', 'prefix'], self.env)
+            result = run([TMUX, '-S', sock, 'show-options', '-gv', 'prefix'], tmux_env)
             self.assertEqual(result.stdout.strip(), 'C-Space')
         finally:
-            run([TMUX, '-S', sock, 'kill-server'], self.env)
+            run([TMUX, '-S', sock, 'kill-server'], tmux_env)
 
 
 class DetectionTests(unittest.TestCase):
