@@ -1,1 +1,1 @@
-/Users/medina_station/.dotfiles/.mac-setup.sh
+.dotfiles/.mac-setup.sh
