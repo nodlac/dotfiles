@@ -57,6 +57,7 @@ HOME=${HOME%/}
 [ -d "$ROOT/.git" ] || fail "Use a conventional clone, not a bare repository or legacy home worktree; see docs/MIGRATION.md"
 [ "$ROOT" != "$HOME" ] || fail "Refusing to install from a home-directory worktree"
 case "$profile" in headless|desktop) ;; *) fail "Unknown profile: $profile" ;; esac
+case "$work_os" in ''|linux|macos) ;; *) fail "Unknown --confirm-work-os: $work_os" ;; esac
 case "$machine" in
     generic) ;;
     behemoth)
@@ -109,6 +110,14 @@ fi
 apply_links
 [ "$packages_requested" = no ] || install_packages
 [ "$plugins_requested" = no ] || install_plugins
+# Record this machine's identity so `dtf pull` can re-preview the same plan.
+# One-time decisions (--replace, installs) are deliberately not recorded.
+setup_args="--machine $machine --profile $profile${work_os:+ --confirm-work-os $work_os}"
+args_file="$HOME/.local/state/dotfiles/setup-args"
+if [ ! -f "$args_file" ] || [ "$(cat "$args_file")" != "$setup_args" ]; then
+    mkdir -p "${args_file%/*}"
+    printf '%s\n' "$setup_args" > "$args_file"
+fi
 log 'Setup complete. Start zsh (or restart it); tmux config applies to new servers.'
 log 'No login-shell, Git, credential, service or OS-default changes were made.'
 log 'Local overrides: ~/.config/dotfiles/local.zsh and tmux.local.conf (never managed by setup).'

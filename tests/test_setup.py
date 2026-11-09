@@ -160,6 +160,19 @@ class SetupTests(unittest.TestCase):
         self.setup('--dry-run')
         self.assertEqual(snapshot(self.home), before)
 
+    def test_apply_records_machine_args_for_pull_preview(self):
+        args_file = self.home / '.local/state/dotfiles/setup-args'
+        self.setup('--dry-run')
+        self.assertFalse(args_file.exists())
+        self.setup()
+        self.assertEqual(args_file.read_text(), '--machine generic --profile headless\n')
+        # Switching machines re-targets the machine.zsh links, so it needs --replace;
+        # the one-time --replace itself must not be recorded.
+        self.setup('--machine', 'callisto', '--profile', 'headless', '--replace')
+        self.assertEqual(args_file.read_text(), '--machine callisto --profile headless\n')
+        # The recorded args must re-run cleanly as a dry-run preview.
+        self.setup('--dry-run', *args_file.read_text().split())
+
     def test_conflict_is_atomic_and_unchanged(self):
         (self.home / '.zshrc').write_text('old config\n')
         before = snapshot(self.home)

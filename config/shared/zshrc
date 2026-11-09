@@ -17,7 +17,29 @@ fi
 # The native df command is deliberately not aliased or wrapped.
 # Remove legacy helper aliases before defining replacements on an explicit reload.
 unalias dtf dtf-test dtf-quick-commit 2>/dev/null || true
-alias dtf='git -C "$DOTFILES_ROOT"'
+# Plain git passthrough, except an interactive `dtf pull` also previews this
+# machine's recorded link plan and offers to apply it. Applying stays a y/N
+# choice and conflicts still require a manual --replace; non-TTY use is inert.
+dtf() {
+    git -C "$DOTFILES_ROOT" "$@" || return
+    [[ ${1:-} == pull && -t 0 && -t 1 ]] || return 0
+    local plan args_file="$HOME/.local/state/dotfiles/setup-args"
+    [[ -r $args_file ]] || return 0
+    local -a args
+    args=(${(z)"$(<$args_file)"})
+    if ! plan=$(bash "$DOTFILES_ROOT/setup.sh" --dry-run $args 2>&1); then
+        print -r -- "$plan"
+        return 0
+    fi
+    print -r -- "$plan" | grep -q '^LINK' || return 0
+    print -r -- "$plan"
+    if read -q "?Apply the links above? [y/N] "; then
+        print
+        bash "$DOTFILES_ROOT/setup.sh" $args
+    else
+        print
+    fi
+}
 dtf-test() { bash "$DOTFILES_ROOT/tests/run.sh" "$@"; }
 # Explicit user-invoked helper only; bootstrap never invokes it.
 dtf-quick-commit() {
