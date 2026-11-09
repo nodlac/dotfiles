@@ -44,7 +44,7 @@ authorized security review and must never be printed in CI logs.
 
 ## Current suite
 
-Local implementation result: **54 tests passed, no skips**, on Behemoth Linux
+Local implementation result: **55 tests passed, no skips**, on Behemoth Linux
 using disposable homes (zsh and tmux loading checks included). Workflow YAML
 also parsed with Ruby's YAML library, and `git diff --check` passed. These are
 not claims of actual machine migration or package-manager installation testing.
@@ -72,9 +72,22 @@ required-source failures, profile validation, work-OS confirmation, links, broke
 links/files/directories as conflicts, explicit unique backups, unsafe parent
 symlinks, idempotency, side-effect-free dry-run, checkout/home-worktree safeguards,
 package/plugin plans, missing manifests, native `df`, checkout-scoped `dtf`,
-missing optional plugins, local overrides, and isolated tmux configuration loading.
+missing optional plugins, local overrides, canonical config loading without the
+legacy tree, retired-entrypoint absence, documentation links, and isolated tmux
+configuration loading.
 Package/network commands are not actually run by tests. Paths with spaces are
 included in fixtures.
+
+## Cleanup regression changes
+
+The pre-cleanup suite passed all 54 tests locally. Cleanup removed obsolete
+installer wrappers, duplicate snapshots, legacy package inventories and root
+config symlinks; their original source remains in Git history. Two tests for the
+retired compatibility interface were replaced with checks that only the canonical
+entry point is shipped and that shared shell loading works without the old tree.
+Syntax checks now cover maintained code rather than disabled historical snapshots.
+An additional documentation-link check catches references to removed files.
+Runtime, migration-safety, platform, tmux and native-df checks remain in place.
 
 ## HOME-dependent tmux launchers
 

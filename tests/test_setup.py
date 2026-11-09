@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -85,9 +86,7 @@ class SetupTests(unittest.TestCase):
         self.repo.mkdir()
         # Never copy arbitrary tracked files, credentials or private work configs.
         for name in ['setup.sh', 'lib/setup.sh', 'platform/detect.sh',
-                     'platform/linux.zsh', 'platform/macos.zsh',
-                     '.dotfiles/.eos-setup.sh', '.dotfiles/.mac-setup.sh',
-                     '.dotfiles/.server-setup.sh', '.dotfiles/.zshrc', '.dotfiles/.zshenv']:
+                     'platform/linux.zsh', 'platform/macos.zsh']:
             target = self.repo / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / name, target)
@@ -122,21 +121,22 @@ class SetupTests(unittest.TestCase):
         self.assertIn('--dry-run', self.setup('--help').stdout)
         self.assertEqual(snapshot(self.home), {})
 
-    def test_compatibility_entrypoints_delegate(self):
-        for name in ['.eos-setup.sh', '.mac-setup.sh', '.server-setup.sh']:
-            result = run([BASH, str(self.repo / '.dotfiles' / name), '--help'], self.env)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('Usage: ./setup.sh', result.stdout)
-        result = run([BASH, str(self.repo / '.dotfiles/.server-setup.sh'), '--dry-run'], self.env)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(snapshot(self.home), {})
+    def test_retired_entrypoints_are_not_shipped(self):
+        for name in ['.mac-setup.sh', '.zshrc', '.tmux.conf', 'legacy',
+                     '.dotfiles/.eos-setup.sh', '.dotfiles/.mac-setup.sh',
+                     '.dotfiles/.server-setup.sh', '.dotfiles/.zshrc',
+                     '.dotfiles/.zshenv', '.dotfiles/.tmux.conf', '.dotfiles/test.sh']:
+            self.assertFalse(os.path.lexists(ROOT / name), name)
+        self.assertTrue((ROOT / 'setup.sh').is_file())
 
     @unittest.skipUnless(ZSH, 'zsh unavailable')
-    def test_compatibility_shell_loaders(self):
+    def test_canonical_shell_loads_without_legacy_tree(self):
+        self.assertFalse((self.repo / '.dotfiles').exists())
         self.setup()
-        result = self.shell('source "$DOTFILES_ROOT/.dotfiles/.zshenv"; '
-                            'source "$DOTFILES_ROOT/.dotfiles/.zshrc"; '
-                            '[[ $(dtf rev-parse --show-toplevel) = "$DOTFILES_ROOT" ]]')
+        for name, source in [('.zshrc', 'zshrc'), ('.zshenv', 'zshenv')]:
+            self.assertEqual((self.home / name).resolve(), self.repo / 'config/shared' / source)
+        result = self.shell('[[ $(dtf rev-parse --show-toplevel) = "$DOTFILES_ROOT" ]] '
+                            '&& (( $+functions[dtf-test] ))')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, '')
 
@@ -545,21 +545,29 @@ class DetectionTests(unittest.TestCase):
 class SourceChecks(unittest.TestCase):
     def test_shell_syntax(self):
         paths = [ROOT / 'setup.sh', ROOT / 'lib/setup.sh', ROOT / 'platform/detect.sh',
-                 ROOT / 'tests/run.sh', ROOT / '.dotfiles/test.sh', ROOT / 'tools/git-hooks/pre-commit']
-        paths += list((ROOT / 'legacy').glob('*setup.sh'))
-        paths += list((ROOT / '.dotfiles').glob('*setup.sh'))
+                 ROOT / 'tests/run.sh', ROOT / 'tools/git-hooks/pre-commit']
         for p in paths:
             result = run([BASH, '-n', str(p)], BASE_ENV)
             self.assertEqual(result.returncode, 0, str(p) + result.stderr)
         if not ZSH:
             self.skipTest('bash syntax passed; zsh unavailable')
         zpaths = [ROOT / 'config/shared/zshrc', ROOT / 'config/shared/zshenv',
-                  ROOT / '.dotfiles/.zshrc', ROOT / '.dotfiles/.zshenv',
                   ROOT / 'config/optional/helpers.zsh']
         zpaths += list((ROOT / 'platform').glob('*.zsh')) + list((ROOT / 'machines').glob('*.zsh'))
         for p in zpaths:
             result = run([ZSH, '-n', str(p)], BASE_ENV)
             self.assertEqual(result.returncode, 0, str(p) + result.stderr)
+
+    def test_documentation_links_resolve(self):
+        # Only public setup docs; do not walk private notes or arbitrary Markdown.
+        paths = [ROOT / 'README.md'] + [ROOT / 'docs' / name for name in
+                 ['PLATFORMS.md', 'MIGRATION.md', 'FEATURE_PARITY.md', 'TESTING.md']]
+        for document in paths:
+            for link in re.findall(r'\[[^\]]*\]\(([^)]+)\)', document.read_text()):
+                if '://' in link or link.startswith(('#', 'mailto:')):
+                    continue
+                target = link.split('#', 1)[0]
+                self.assertTrue((document.parent / target).exists(), f'{document}: {link}')
 
     def test_config_regressions(self):
         aerospace = (ROOT / '.aerospace.toml').read_text()

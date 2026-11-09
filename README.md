@@ -83,7 +83,6 @@ platform/*.zsh             OS-specific shell behavior
 platform/packages/         CLI and separate desktop package manifests
 machines/                  Public, non-secret machine overrides
 ~/.config/dotfiles/         User-owned local overrides; never replaced by setup
-legacy/                    Disabled historical recipes; not bootstrap modules
 tests/                     Isolated regression checks
 ```
 
@@ -91,7 +90,9 @@ Desktop application configs stay in their existing repository paths to preserve
 history. They are linked from an explicit allowlist, never by globbing every
 hidden file. No SSH, credential, personal/work profile, or environment file is
 installed or read by bootstrap. Unrelated `tools/` files stay in the checkout and
-are not automatically installed into your home or added to PATH.
+are not automatically installed into your home or added to PATH. Unreviewed
+personal assets and private profiles from the old layout remain untouched;
+they are not bootstrap modules.
 
 Setup links the selected public machine files into `~/.config/dotfiles/`. It does
 not infer machine identity from hostname. After shared/platform/machine settings,
@@ -121,8 +122,9 @@ dtf-test
 Native `df` remains the disk-space command. `dtf-quick-commit` is an explicit
 user-invoked helper that stages tracked changes, opens a commit, then pushes;
 setup never invokes it. `dotfiles-setup` reruns the unified entry point.
-The old platform script paths delegate to setup for compatibility, without
-implicitly installing packages. Do not use them to update a legacy home worktree.
+Obsolete platform installers, root config symlinks, and compatibility loaders
+have been removed. Use `setup.sh` or `dotfiles-setup`, not the old script paths.
+Historical recipes remain in Git history; see the feature inventory below.
 
 Hooks are **not changed by setup**. If desired, explicitly enable the working-tree
 checks with `dtf config core.hooksPath tools/git-hooks`; see [testing](docs/TESTING.md).
@@ -133,9 +135,12 @@ Follow [the migration guide](docs/MIGRATION.md), one machine at a time **after P
 review**. It preserves the old Git directory, branches, backup and local config.
 Do not pull this refactor into a legacy home worktree as a migration shortcut.
 
-Callisto's local `server` branch, conflicts and `~/.dotfiles.bak` are unverified.
-Nothing here resolves them or accesses that machine. Medina Station's OS and work
-requirements must be confirmed explicitly before selecting its machine layer.
+Behemoth's canonical links were verified locally, and the owner confirmed
+Callisto's new shell link and checkout-scoped `dtf`. Their old repositories/backups
+remain separate; this cleanup does not retire them. See the migration guide for the original Callisto risk and subsequent
+owner-reported checks. Medina Station's macOS migration is recorded in
+[platform verification](docs/PLATFORMS.md); the personal MacBook and WSL2 machine
+still need their own checks.
 
 ## Tests and verification
 
@@ -150,5 +155,5 @@ which checks are automated versus actual machine validation. GitHub Actions runs
 the suite on Linux and macOS; a green fixture test is not a WSL/Callisto deployment.
 
 See [feature preservation and deliberate safety changes](docs/FEATURE_PARITY.md)
-before relying on an old installer behavior. The original
-[refactor brief](docs/CROSS_PLATFORM_REFACTOR_PROMPT.md) remains available.
+before relying on an old installer behavior. Removed installers and the completed
+refactor brief are available in Git history, not duplicated in the active tree.
