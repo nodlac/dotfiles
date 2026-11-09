@@ -354,35 +354,27 @@ setup_symlinks() {
         [ "$base" = ".." ] && continue
         [ "$base" = ".git" ] && continue
         [ "$base" = ".dotfiles" ] && continue
-        if [ -L "$USER_HOME/$base" ]; then
-            echo "  $base already linked"
-        else
-            ln -sf "$DOTFILES_DIR/$base" "$USER_HOME/$base"
-            echo "  Linked $base"
-        fi
+        ln -sfn ".dotfiles/$base" "$USER_HOME/$base"
+        echo "  Linked $base"
     done
     
     if [ -d "$DOTFILES_DIR/.config" ]; then
+        mkdir -p "$USER_HOME/.config"
         for d in "$DOTFILES_DIR/.config"/*; do
             [ -d "$d" ] || continue
             base=$(basename "$d")
-            mkdir -p "$USER_HOME/.config/$base"
-            if [ -L "$USER_HOME/.config/$base" ]; then
-                echo "  .config/$base already linked"
+            if [ -e "$USER_HOME/.config/$base" ] && [ ! -L "$USER_HOME/.config/$base" ]; then
+                echo "  .config/$base exists (not symlink) — skipped"
             else
-                ln -sf "$d" "$USER_HOME/.config/$base"
+                ln -sfn "../.dotfiles/.config/$base" "$USER_HOME/.config/$base"
                 echo "  Linked .config/$base"
             fi
         done
     fi
     
     if [ -d "$DOTFILES_DIR/tools" ]; then
-        if [ -L "$USER_HOME/tools" ]; then
-            echo "  tools already linked"
-        else
-            ln -sf "$DOTFILES_DIR/tools" "$USER_HOME/tools"
-            echo "  Linked tools"
-        fi
+        ln -sfn ".dotfiles/tools" "$USER_HOME/tools"
+        echo "  Linked tools"
     fi
     
     if [ -d "$DOTFILES_DIR/.zsh" ]; then
@@ -390,12 +382,8 @@ setup_symlinks() {
         for f in "$DOTFILES_DIR/.zsh"/*; do
             [ -f "$f" ] || continue
             base=$(basename "$f")
-            if [ -L "$USER_HOME/.zsh/$base" ]; then
-                echo "  .zsh/$base already linked"
-            else
-                ln -sf "$f" "$USER_HOME/.zsh/$base"
-                echo "  Linked .zsh/$base"
-            fi
+            ln -sfn "../.dotfiles/.zsh/$base" "$USER_HOME/.zsh/$base"
+            echo "  Linked .zsh/$base"
         done
     fi
 }

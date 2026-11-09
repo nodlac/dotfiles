@@ -149,17 +149,12 @@ setup_symlinks() {
         case "$base" in
             .|..|.git|.dotfiles|.DS_Store) continue ;;
         esac
-        if [ -L "$USER_HOME/$base" ]; then
-            echo "  $base already linked"
-        elif [ -f "$USER_HOME/$base" ]; then
+        if [ -f "$USER_HOME/$base" ] && [ ! -L "$USER_HOME/$base" ]; then
             echo "  $base exists (not symlink) — backing up to $base.bak"
             mv "$USER_HOME/$base" "$USER_HOME/$base.bak"
-            ln -sf "$DOTFILES_DIR/$base" "$USER_HOME/$base"
-            echo "  Linked $base"
-        else
-            ln -sf "$DOTFILES_DIR/$base" "$USER_HOME/$base"
-            echo "  Linked $base"
         fi
+        ln -sfn ".dotfiles/$base" "$USER_HOME/$base"
+        echo "  Linked $base"
     done
 }
 

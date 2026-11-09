@@ -46,12 +46,8 @@ setup_symlinks() {
         [ "$base" = ".." ] && continue
         [ "$base" = ".git" ] && continue
         [ "$base" = ".dotfiles" ] && continue
-        if [ -L "$USER_HOME/$base" ]; then
-            echo "  $base already linked"
-        else
-            ln -sf "$DOTFILES_DIR/$base" "$USER_HOME/$base"
-            echo "  Linked $base"
-        fi
+        ln -sfn ".dotfiles/$base" "$USER_HOME/$base"
+        echo "  Linked $base"
     done
 }
 
