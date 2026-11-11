@@ -121,7 +121,6 @@ plan_plugins() {
         https://github.com/zsh-users/zsh-autosuggestions.git
         https://github.com/zsh-users/zsh-completions.git
         https://github.com/zdharma-continuum/fast-syntax-highlighting.git
-        https://github.com/Aloxaf/fzf-tab.git
         https://github.com/tmux-plugins/tpm.git
         https://github.com/jimeh/tmux-themepack.git
         https://github.com/tmux-plugins/tmux-resurrect.git
@@ -132,7 +131,6 @@ plan_plugins() {
         "$HOME/.zsh/zsh-autosuggestions"
         "$HOME/.zsh/zsh-completions"
         "$HOME/.zsh/fast-syntax-highlighting"
-        "$HOME/.zsh/fzf-tab"
         "$HOME/.tmux/plugins/tpm"
         "$HOME/.tmux/plugins/tmux-themepack"
         "$HOME/.tmux/plugins/tmux-resurrect"

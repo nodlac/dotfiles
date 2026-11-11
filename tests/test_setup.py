@@ -384,7 +384,7 @@ class SetupTests(unittest.TestCase):
         self.env['PATH'] = str(bin_dir) + os.pathsep + self.env['PATH']
         self.setup('--install-plugins')
         self.assertTrue((self.home / '.tmux/plugins/tpm/.git').is_dir())
-        self.assertTrue((self.home / '.zsh/fzf-tab/.git').is_dir())
+        self.assertTrue((self.home / '.zsh/zsh-autosuggestions/.git').is_dir())
         before = snapshot(self.home)
         self.setup('--install-plugins')
         self.assertEqual(snapshot(self.home), before)
