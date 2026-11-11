@@ -89,7 +89,6 @@ autoload -Uz compinit
 compinit -i
 for plugin in \
     "$HOME/.zsh/zsh-history-substring-search/zsh-history-substring-search.zsh" \
-    "$HOME/.zsh/zsh-autosuggestions/zsh-autosuggestions.zsh" \
     "$HOME/.zsh/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh"; do
     [[ ! -r "$plugin" ]] || source "$plugin"
 done
