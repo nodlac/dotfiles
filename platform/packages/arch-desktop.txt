@@ -7,6 +7,7 @@ i3blocks
 i3lock
 xclip
 scrot
+flameshot
 obs-studio
 kdenlive
 inkscape

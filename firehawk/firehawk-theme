@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""Ember desktop theme builder. Python >=3.11; Pillow required only for apply."""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import socket
+import shutil
+import subprocess
+import sys
+import tempfile
+import tomllib
+
+ROOT = Path(__file__).resolve().parent
+
+
+def read_toml(path):
+    with path.open('rb') as stream:
+        return tomllib.load(stream)
+
+
+def read_profile(path):
+    data = read_toml(path)
+    aliases = data.get('aliases', [])
+    if not isinstance(aliases, list) or any(not isinstance(alias, str) or
+            not re.fullmatch(r'[a-z0-9][a-z0-9-]*', alias) for alias in aliases):
+        raise ValueError(f'Invalid hostname aliases in {path.name}')
+    return data
+
+
+def resolve(profile=None, hostname=None, home=None):
+    home = home or Path.home()
+    override = home / '.config/firehawk/profile'
+    if profile is None and override.is_file():
+        profile = override.read_text().strip()
+    if profile is None:
+        host = (hostname or socket.gethostname()).split('.')[0].lower()
+        matches = [p.stem for p in sorted((ROOT / 'profiles').glob('*.toml'))
+                   if host in read_profile(p).get('aliases', [])]
+        if len(matches) > 1:
+            raise ValueError(f'Ambiguous hostname alias: {host}')
+        profile = matches[0] if matches else 'default'
+    if not re.fullmatch(r'[a-z0-9][a-z0-9-]*', profile):
+        raise ValueError('Invalid profile name')
+    data = read_profile(ROOT / 'profiles' / f'{profile}.toml')
+    for field in ('name', 'role'):
+        if not isinstance(data.get(field), str) or not re.fullmatch(r'[A-Z0-9 /_-]{1,60}', data[field]):
+            raise ValueError(f'Unsafe profile {field}')
+    palette = read_toml(ROOT / 'theme/palette.toml')
+    overrides = data.get('colors', {})
+    if not isinstance(overrides, dict) or overrides.keys() - palette.keys():
+        raise ValueError('Unknown profile color tokens')
+    palette.update(overrides)
+    if not isinstance(data.get('mobile', False), bool):
+        raise ValueError('mobile must be a TOML boolean')
+    for value in palette.values():
+        if not isinstance(value, str) or not re.fullmatch(r'#[0-9A-Fa-f]{6}', value):
+            raise ValueError('Invalid palette color')
+    return profile, data, palette
+
+
+def check_parents(path, home):
+    """Refuse symlink/file parents; never traverse a different config tree."""
+    path = path.absolute()
+    if not path.is_relative_to(home) or home.is_symlink() or not home.is_dir():
+        raise ValueError(f'Unsafe home/target: {path}')
+    for parent in path.parents:
+        if parent == home:
+            break
+        if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
+            raise ValueError(f'Unsafe parent: {parent}')
+
+
+def wallpaper(path, profile, palette):
+    from PIL import Image, ImageDraw, ImageFont
+    im = Image.new('RGB', (2560, 1440), palette['hull'])
+    d = ImageDraw.Draw(im)
+    fontpath = '/usr/share/fonts/noto/NotoSansMono-Regular.ttf'
+    # Match the machine's actual font if the standard Arch path differs.
+    if not Path(fontpath).exists():
+        import subprocess
+        fontpath = subprocess.check_output(['fc-match', '-f', '%{file}', 'monospace'], text=True)
+    def font(size):
+        return ImageFont.truetype(fontpath, size)
+    # Structural ring: background motif, not fabricated telemetry.
+    cx, cy = 1990, 690
+    for radius in (380, 398, 520, 525):
+        d.ellipse((cx-radius, cy-radius, cx+radius, cy+radius), outline='#20262D', width=2)
+    d.arc((cx-398, cy-398, cx+398, cy+398), 215, 285, fill=palette['orange'], width=5)
+    d.arc((cx-520, cy-520, cx+520, cy+520), 30, 70, fill=palette['ember'], width=3)
+    d.line((110, 1180, 2450, 1180), fill='#30343B', width=2)
+    d.line((110, 1180, 440, 1180), fill=palette['orange'], width=4)
+    d.text((110, 970), profile['name'], font=font(100), fill=palette['white'])
+    d.text((116, 1100), profile['role'], font=font(24), fill=palette['orange'])
+    d.text((110, 1220), 'EMBER / DESKTOP THEME', font=font(20), fill=palette['steel'])
+    # Theme and machine identity are independent of business branding.
+    d.text((cx-100, cy-18), 'EMBER', font=font(40), fill=palette['orange'])
+    im.save(path)
+
+
+def build(output, profile, data, colors, home):
+    output.mkdir(parents=True, exist_ok=False)
+    current = home / '.config/firehawk/current'
+    values = {**data, **colors, 'wallpaper': str(current / 'wallpaper.png'),
+              'current': str(current)}
+    values.update({k+'_hex': v[1:] for k, v in colors.items()})
+    for source in (ROOT / 'templates').rglob('*'):
+        if not source.is_file():
+            continue
+        text = source.read_text()
+        text = re.sub(r'@@([a-z_]+)@@', lambda m: values[m[1]], text)
+        # CSS imports must work whether reached through activation links or directly.
+        text = text.replace('@import "../colors.css";', '@import ' + json.dumps(str(current / 'colors.css')) + ';')
+        target = output / source.relative_to(ROOT / 'templates')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+    (output / 'colors.css').write_text(''.join(f'@define-color {k} {v};\n' for k,v in colors.items()))
+    (output / 'theme.lua').write_text('return {\n' + ''.join(f'  {k} = "rgb({v[1:]})",\n' for k,v in colors.items()) + '}\n')
+    bar = {
+        'layer':'top', 'position':'top', 'height':36, 'margin-top':8,
+        'margin-left':12, 'margin-right':12,
+        'modules-left':['custom/identity','custom/downloads','custom/screenshots','hyprland/workspaces'],
+        'modules-center':['clock'],
+        'modules-right':['cpu','memory','pulseaudio','network','tray','custom/notifications'],
+        'custom/identity':{'format':data['name'], 'tooltip-format':'Ember desktop theme'},
+        'custom/downloads':{'format':'Downloads', 'tooltip-format':'Latest 5 downloads — click, then drag a file',
+                            'on-click':'python3 "$HOME/.config/firehawk/current/scripts/recent-files.py" downloads'},
+        'custom/screenshots':{'format':'Screenshots', 'tooltip-format':'Latest 5 screenshots — click, then drag a file',
+                              'on-click':'python3 "$HOME/.config/firehawk/current/scripts/recent-files.py" screenshots'},
+        'hyprland/workspaces':{'format':'{name}', 'persistent-workspaces':{'*':[1,2,3,4,5]}},
+        'clock':{'format':'{:%H:%M  /  %a %d %b}', 'tooltip-format':'<tt>{calendar}</tt>'},
+        'cpu':{'format':'CPU {usage}%', 'interval':5},
+        'memory':{'format':'RAM {percentage}%', 'interval':5},
+        'pulseaudio':{'format':'VOL {volume}%', 'format-muted':'MUTED', 'on-click':'wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle'},
+        'network':{'format-ethernet':'LAN', 'format-wifi':'{essid}', 'format-disconnected':'OFFLINE', 'tooltip-format':'{ifname}: {ipaddr}'},
+        'tray':{'spacing':10},
+        'custom/notifications':{'format':'NOTICES', 'tooltip':False, 'on-click':'swaync-client -t'},
+    }
+    if data.get('mobile', False):
+        bar['modules-right'].insert(4, 'battery')
+        bar['battery'] = {'format': 'BAT {capacity}%', 'format-charging': 'CHG {capacity}%',
+                          'states': {'warning': 25, 'critical': 10}}
+    (output / 'waybar/config.jsonc').write_text(json.dumps(bar, indent=2)+'\n')
+    (output / 'hypr/hyprpaper.conf').write_text('wallpaper {\n    monitor =\n    path = '+str(current / 'wallpaper.png')+'\n    fit_mode = cover\n}\n')
+    (output / 'swaync/config.json').write_text(json.dumps({
+        '$schema':'/etc/xdg/swaync/configSchema.json',
+        'positionX':'right','positionY':'top','control-center-width':400,
+        'widgets':['title','dnd','notifications'],
+        'widget-config':{'title':{'text':data['name']+' / NOTIFICATIONS','clear-all-button':True}}
+    }, indent=2)+'\n')
+    # Optional snippet, not automatically injected into the existing terminal config.
+    (output / 'ghostty.conf').write_text(
+        f"background = {colors['hull'][1:]}\nforeground = {colors['white'][1:]}\ncursor-color = {colors['orange'][1:]}\nselection-background = {colors['orange'][1:]}\nselection-foreground = {colors['hull'][1:]}\n")
+    (output / 'manifest.json').write_text(json.dumps({'profile':profile, **data}, indent=2)+'\n')
+    wallpaper(output / 'wallpaper.png', data, colors)
+
+
+def activate(home):
+    config = home / '.config'
+    check_parents(config / 'firehawk/current', home)
+    for name in ('hypr', 'waybar', 'swaync'):
+        check_parents(config / name, home)
+    current = config / 'firehawk/current'
+    if not (current / 'manifest.json').is_file():
+        raise ValueError('Run apply before activate')
+    links = {config / name: current / name for name in ('hypr','waybar','swaync')}
+    conflicts = [str(p) for p,t in links.items()
+                 if os.path.lexists(p) and not (p.is_symlink() and p.readlink() == t)]
+    if conflicts:
+        raise ValueError('Existing configs left untouched: ' + ', '.join(conflicts))
+    for path, target in links.items():
+        if not path.is_symlink():
+            path.symlink_to(target, target_is_directory=True)
+    print('Activated config links only. i3 and the running session are unchanged.')
+
+
+def input_digest(profile, data, colors, home):
+    digest = hashlib.sha256(json.dumps([str(home), profile, data, colors], sort_keys=True).encode())
+    sources = [ROOT / 'firehawk-theme']
+    sources += sorted(p for p in (ROOT / 'templates').rglob('*') if p.is_file())
+    for source in sources:
+        digest.update(str(source.relative_to(ROOT)).encode())
+        digest.update(source.read_bytes())
+    return digest.hexdigest()
+
+
+def apply_theme(home, profile=None, force=False):
+    profile, data, colors = resolve(profile, home=home)
+    config = home / '.config/firehawk'
+    current = config / 'current'
+    state = home / '.local/state/firehawk/generations'
+    for path in (current, state / 'placeholder', config / 'apply.lock'):
+        check_parents(path, home)
+    if os.path.lexists(current) and not current.is_symlink():
+        raise ValueError(f'Not replacing non-symlink: {current}')
+    config.mkdir(parents=True, exist_ok=True)
+    # Fail rather than interleave concurrent generation changes. Do not follow locks.
+    fd = os.open(config / 'apply.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        digest = input_digest(profile, data, colors, home)
+        try:
+            previous = json.loads((current / 'manifest.json').read_text())
+            intact = all((current / p).is_file() and
+                         hashlib.sha256((current / p).read_bytes()).hexdigest() == value
+                         for p, value in previous.get('outputs', {}).items())
+            if not force and previous.get('input_digest') == digest and previous.get('outputs') and intact:
+                print(f'Unchanged: {profile}; existing generation retained.')
+                return current.resolve()
+        except (OSError, ValueError):
+            pass
+        state.mkdir(parents=True, exist_ok=True)
+        stage = Path(tempfile.mkdtemp(prefix=profile+'-', dir=state))
+        output = stage / 'config'
+        temp = config / ('current-'+stage.name)
+        try:
+            build(output, profile, data, colors, home)
+            outputs = {str(p.relative_to(output)): hashlib.sha256(p.read_bytes()).hexdigest()
+                       for p in sorted(output.rglob('*')) if p.is_file() and p.name != 'manifest.json'}
+            (output / 'manifest.json').write_text(json.dumps({
+                'profile':profile, **data, 'input_digest':digest, 'outputs':outputs,
+            }, indent=2)+'\n')
+            temp.symlink_to(output, target_is_directory=True)
+            temp.replace(current)
+        except Exception:
+            if temp.is_symlink():
+                temp.unlink()
+            shutil.rmtree(stage)
+            raise
+        print(f'Generated: {output}\nCurrent: {current}\nNo apps reloaded; activation is a separate command.')
+        return output
+
+
+def deactivate(home):
+    config = home / '.config'
+    for name in ('hypr', 'waybar', 'swaync'):
+        check_parents(config / name, home)
+    for name in ('hypr', 'waybar', 'swaync'):
+        path = config / name
+        if path.is_symlink() and path.readlink() == config / 'firehawk/current' / name:
+            path.unlink()
+            print(f'Unlinked: {path}')
+    print('i3, backups, theme generations and unrelated configs were left untouched.')
+
+
+def doctor(home):
+    required = ('Hyprland', 'hyprctl', 'waybar', 'hyprlock', 'hypridle', 'hyprpaper',
+                'swaync', 'rofi', 'ghostty', 'grim', 'slurp', 'wl-copy', 'wpctl')
+    missing = [name for name in required if shutil.which(name) is None]
+    print('Missing commands: ' + (', '.join(missing) or 'none'))
+    print('Current theme: ' + str((home / '.config/firehawk/current').resolve()))
+    if os.environ.get('HYPRLAND_INSTANCE_SIGNATURE') and shutil.which('hyprctl'):
+        result = subprocess.run(['hyprctl', 'configerrors'], capture_output=True, text=True, timeout=10)
+        print(result.stdout or result.stderr)
+        return bool(missing) or result.returncode != 0 or bool(result.stdout.strip())
+    print('Live session checks pending: run doctor from Hyprland after login.')
+    return bool(missing)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('command', choices=['preview','apply','activate','deactivate','doctor'])
+    parser.add_argument('profile', nargs='?')
+    parser.add_argument('--force', action='store_true', help='rebuild even when inputs are unchanged')
+    args = parser.parse_args()
+    if args.profile and args.command not in ('preview', 'apply'):
+        parser.error('A profile is only valid with preview/apply')
+    if args.force and args.command != 'apply':
+        parser.error('--force is only valid with apply')
+    home = Path.home()
+    try:
+        if args.command == 'activate':
+            activate(home)
+        elif args.command == 'deactivate':
+            deactivate(home)
+        elif args.command == 'doctor':
+            raise SystemExit(int(doctor(home)))
+        elif args.command == 'apply':
+            apply_theme(home, args.profile, args.force)
+        else:
+            profile, data, colors = resolve(args.profile, home=home)
+            print(json.dumps({'profile':profile, **data, 'palette':colors}, indent=2))
+    except (ValueError, OSError, KeyError, ImportError, subprocess.SubprocessError) as error:
+        parser.exit(1, f'firehawk-theme: {error}\n')
+
+
+if __name__ == '__main__':
+    main()

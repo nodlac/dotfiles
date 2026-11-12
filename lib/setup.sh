@@ -16,7 +16,9 @@ check_parents() {
     done
 }
 add_link() {
-    [ -e "$1" ] || fail "Missing required source: $1"
+    if [ "${3:-existing}" != generated ]; then
+        [ -e "$1" ] || fail "Missing required source: $1"
+    fi
     case "$ROOT/" in
         "$2/"*) fail "Checkout is inside managed target $2; clone into a separate projects directory" ;;
     esac
@@ -92,7 +94,12 @@ plan_packages() {
     esac
     if [ "$profile" = desktop ]; then
         case "$manager" in
-            pacman) read_packages "$ROOT/platform/packages/arch-desktop.txt" ;;
+            pacman)
+                if [ "$desktop" = firehawk ]; then
+                    read_packages "$ROOT/platform/packages/arch-firehawk.txt"
+                else
+                    read_packages "$ROOT/platform/packages/arch-desktop.txt"
+                fi ;;
             brew)
                 read_packages "$ROOT/platform/packages/macos-desktop-formulae.txt"
                 local base_count=${#packages[@]}
@@ -111,10 +118,78 @@ install_packages() {
         brew)
             brew install "${packages[@]}"
             [ "${#casks[@]}" -eq 0 ] || brew install --cask "${casks[@]}" ;;
-        pacman) sudo pacman -S --needed "${packages[@]}" ;;
+        pacman)
+            if [ "$profile:$desktop" = desktop:firehawk ]; then
+                log "Firehawk requests a full upgrade to avoid an Arch partial upgrade; review pacman before accepting."
+                sudo pacman -Syu --needed "${packages[@]}"
+            else
+                sudo pacman -S --needed "${packages[@]}"
+            fi ;;
         apt-get) sudo apt-get update; sudo apt-get install "${packages[@]}" ;;
     esac
 }
+# Pinned upstream release; update the version and all four hashes together.
+plan_infisical() {
+    infisical_version=0.45.4
+    local arch os tool
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64|amd64) arch=amd64 ;;
+        aarch64|arm64) arch=arm64 ;;
+        *) fail "Infisical: unsupported architecture $arch" ;;
+    esac
+    case "$DF_OS" in
+        linux) os=linux ;;
+        macos) os=darwin ;;
+        *) fail "Infisical: unsupported OS $DF_OS" ;;
+    esac
+    case "$os:$arch" in
+        linux:amd64) infisical_sha=107389f4c9a0cc48023a834bb2a5bf1280c0a0e45ea7a98d13807d4def21b0a5 ;;
+        linux:arm64) infisical_sha=fcfd91de70efdedc7f8c1b1d90a024b433bb185387fe32467d49625a3bf55379 ;;
+        darwin:amd64) infisical_sha=d5f80a0d926c84f5875bf927152cadd193a769962af67a3d6f4ba3666f1140ae ;;
+        darwin:arm64) infisical_sha=2c44c652b896d5d845abad46348b0b94af1b7be8846491a2501e92e2da43e257 ;;
+    esac
+    infisical_asset=cli_${infisical_version}_${os}_${arch}.tar.gz
+    infisical_target=$HOME/.local/bin/infisical
+    check_parents "$infisical_target"
+    # Never overwrite a user-managed executable or follow a target symlink.
+    if exists "$infisical_target"; then
+        log "KEEP    $infisical_target (remove manually to reinstall)"
+        return
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+        infisical_hasher=(sha256sum)
+    elif command -v shasum >/dev/null 2>&1; then
+        infisical_hasher=(shasum -a 256)
+    else
+        fail 'Infisical requires sha256sum or shasum'
+    fi
+    for tool in curl tar; do
+        command -v "$tool" >/dev/null 2>&1 || fail "Infisical requires $tool"
+    done
+    log "INFISICAL $infisical_version ($os/$arch) -> $infisical_target"
+}
+install_infisical() (
+    exists "$infisical_target" && exit 0
+    set -e
+    umask 077
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    curl --fail --location --silent --show-error \
+        "https://github.com/Infisical/cli/releases/download/v$infisical_version/$infisical_asset" \
+        -o "$tmp/archive.tar.gz"
+    (cd "$tmp"; printf '%s  archive.tar.gz\n' "$infisical_sha" | "${infisical_hasher[@]}" -c -)
+    # Extract only the binary, not arbitrary archive paths.
+    tar -xzf "$tmp/archive.tar.gz" -C "$tmp" infisical
+    [ -f "$tmp/infisical" ] && [ ! -L "$tmp/infisical" ] || fail 'Invalid Infisical binary'
+    chmod 755 "$tmp/infisical"
+    check_parents "$infisical_target"
+    mkdir -p "$(dirname "$infisical_target")"
+    # noclobber refuses an unexpected file (including a symlink) at the target.
+    (set -C; command cat "$tmp/infisical" > "$infisical_target")
+    chmod 755 "$infisical_target"
+)
+
 plan_plugins() {
     plugin_sources=(
         https://github.com/zsh-users/zsh-history-substring-search.git

@@ -56,9 +56,10 @@ bash tests/run.sh
 Requires Python 3, Bash, and Git. Setup is exercised with `/bin/bash`, including
 Apple's system Bash 3.2 on macOS (not accidentally a newer Homebrew Bash).
 zsh and tmux runtime tests explicitly skip if
-unavailable; CI installs both so those checks must run there. The production
-bootstrap itself requires only Bash, Git checkout metadata, and standard Unix
-utilities. It does not depend on Python.
+unavailable; CI installs both so those checks must run there. The default production
+bootstrap requires only Bash, Git checkout metadata, and standard Unix utilities.
+The opt-in Firehawk rendering path additionally requires Python >=3.11, Pillow,
+fontconfig and fonts; its dry-run still requires none of these.
 
 Tests use temporary homes and copies of an explicit set of managed source files.
 They never copy the whole repository or follow the actual user's home files.
@@ -130,6 +131,49 @@ output. Regression fixtures reproduce the HOME-dependent launcher failure and
 verify a direct payload can be probed without changing the isolated HOME. Further
 fixtures reproduce a missing bundled-runtime failure and verify the explicit
 library environment is passed without mutating the base fixture environment.
+
+## Firehawk integration verification
+
+After adding the opt-in `--desktop firehawk` path, local verification passed
+**61 bootstrap tests + 17 theme/deployment tests (78 total)**. Also passed: shell
+syntax, Lua syntax, and `git diff --check`. The real Behemoth dry-run reported
+no conflicts, with i3 unchanged. These results do not claim a live Hyprland test.
+
+```sh
+bash tests/run.sh
+python3 -B firehawk/test_theme.py
+luac -p firehawk/templates/hypr/hyprland.lua
+bash -n setup.sh lib/setup.sh lib/firehawk.sh firehawk/install-packages.sh firehawk/templates/scripts/screenshot
+```
+
+New coverage includes Firehawk platform/argument gating, no-write dry-run,
+separate package plans, missing sources, unsafe state parents, conflict-before-
+generation, explicit backup preservation, full deployment with spaces in HOME
+and checkout paths, repeated-setup idempotency, preservation of i3 and local Lua,
+stubbed explicit full-upgrade arguments, content-damage repair, failed-build
+recovery, selective deactivation, mobile modules and screenshot cancellation.
+No real package manager, login manager or service action was run.
+
+Arch CI now installs the theme validators and runs both suites plus Lua/shell
+checks as an ordinary user. Other portable CI jobs retain their existing suite.
+This records CI configuration, not a claim that remote CI has executed successfully.
+
+## File quick-menu regression coverage
+
+Downloads/Screenshots menus add eight isolated tests for newest-five ordering,
+partial/hidden/symlink exclusion, missing/empty folders, deterministic ties,
+file URI escaping, deleted-file refresh, fixed-folder selection, and no-GUI CLI
+listing. The theme suite also checks the two bar modules and generated popup files.
+
+```sh
+python3 -B firehawk/test_recent_files.py
+```
+
+The current bootstrap suite (65 tests), theme/deployment suite (17 tests) and
+recent-file suite (8 tests) passed locally after this addition. Popup CSS parsing,
+GTK drag-source APIs and the installed layer-shell API were checked without
+opening a window or reading real user file listings. No live Wayland drag/drop
+or target-app acceptance is claimed. Arch CI now includes the recent-file suite.
 
 ## CI and actual machine validation
 

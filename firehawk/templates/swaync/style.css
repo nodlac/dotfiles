@@ -1,0 +1,7 @@
+@import "../colors.css";
+* { font-family: "Noto Sans", sans-serif; font-size: 14px; }
+.control-center { background: @panel; color: @white; border: 1px solid @orange; border-radius: 6px; }
+.notification { background: @panel; color: @white; border: 1px solid @steel; border-left: 3px solid @orange; border-radius: 6px; padding: 10px; }
+.notification.critical { border-left-color: @alert; }
+.summary, .body, .time { color: @white; }
+.notification-action { background: @hull; color: @orange; }

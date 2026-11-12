@@ -57,19 +57,62 @@ available if a later operation fails. Rerun after resolving the error.
 ```sh
 ./setup.sh --install-packages --install-plugins --dry-run
 ./setup.sh --install-packages --install-plugins
+./setup.sh --install-infisical --dry-run
+./setup.sh --install-infisical
 ```
+
+`--install-infisical` separately opts into Infisical CLI v0.45.4 for Linux/macOS
+(x86-64 or ARM64). It downloads the upstream GitHub release, verifies a pinned
+SHA-256 checksum, and installs only the binary into `~/.local/bin` without sudo.
+It requires `curl`, `tar`, and `sha256sum` (or macOS's `shasum`). Existing files at that path are kept;
+remove the binary explicitly to reinstall or upgrade. No login, project setup,
+or secrets are managed. This option is independent of `--install-packages`.
 
 Packages use apt-get, pacman or an already-installed Homebrew. Linux package
 commands request sudo normally; do **not** invoke setup itself with sudo. Package
 manifests are data, not sourced shell code. Existing plugin checkouts are kept
 without pulling. Plugin code is third-party code; review before opting in.
-There is no `curl | sh`, AUR-helper bootstrap, system upgrade, or automatic
-execution of this repository's unrelated tool installers.
+There is no `curl | sh`, AUR-helper bootstrap, implicit system upgrade, or automatic
+execution of this repository's unrelated tool installers. The explicitly requested
+Firehawk package transaction is the exception: it uses a reviewed full Arch upgrade.
 
 Use `--profile desktop` explicitly for supported desktop config/packages.
 `--link-nvim` separately opts into the existing Neovim configuration; it requires
 Neovim >= 0.10 and may install its own plugins when first opened. Ubuntu's packaged
 Neovim may be too old: see [feature inventory](docs/FEATURE_PARITY.md).
+
+## Ember desktop theme (Arch / EndeavourOS, opt-in)
+
+The default Linux desktop remains i3. Ember is the separate, explicit Hyprland
+theme, with shared colors and hostname-selected ship identity. Ember is not a
+business name. The existing `firehawk` option/path names remain for compatibility:
+
+```sh
+./setup.sh --machine behemoth --profile desktop --desktop firehawk --theme-profile behemoth --dry-run
+# Review the plan, then deploy (requests sudo and a full Arch upgrade):
+./setup.sh --machine behemoth --profile desktop --desktop firehawk --theme-profile behemoth --install-packages
+```
+
+For another native Arch machine, omit `--machine behemoth` and use
+`--theme-profile NAME`, or omit it for hostname/local-override detection.
+Unknown hosts receive the default Firehawk identity. This identity selection is
+independent of shell machine selection; setup never renames the system.
+
+Without `--install-packages`, Firehawk needs Python >=3.11, Pillow, fontconfig and
+fonts already installed. The generic/headless bootstrap still has no Python
+dependency. Dry-run performs no generation, imports, or package transactions.
+Conflicts use the same review and explicit `--replace` backup policy as other links.
+Existing i3 config is left alone; no login manager, service or running session is changed.
+
+Firehawk uses a dedicated package manifest. Its explicit package transaction uses
+`pacman -Syu`, unlike the pre-existing generic package path, to avoid a partial
+upgrade while introducing the compositor stack. Review the full transaction.
+Generated theme inputs are content-checked; unchanged reruns keep the same generation.
+The optional Ghostty palette is not injected into existing terminal configuration.
+
+See [Firehawk setup, customization, rollback and live-test checklist](firehawk/README.md).
+The templates target Hyprland's 0.57 Lua API; live compositor validation is still
+required after installing packages.
 
 ## Configuration layers
 
@@ -81,6 +124,8 @@ config/optional/            Reviewed, explicitly sourced helpers only
 platform/detect.sh         Linux/macOS, distribution, WSL1/2 detection
 platform/*.zsh             OS-specific shell behavior
 platform/packages/         CLI and separate desktop package manifests
+firehawk/                  Opt-in fleet identity, theme templates, generator/tests
+lib/firehawk.sh            Firehawk planning and generation integration
 machines/                  Public, non-secret machine overrides
 ~/.config/dotfiles/         User-owned local overrides; never replaced by setup
 tests/                     Isolated regression checks
@@ -94,8 +139,8 @@ are not automatically installed into your home or added to PATH. Unreviewed
 personal assets and private profiles from the old layout remain untouched;
 they are not bootstrap modules.
 
-Setup links the selected public machine files into `~/.config/dotfiles/`. It does
-not infer machine identity from hostname. After shared/platform/machine settings,
+Setup links the selected public machine files into `~/.config/dotfiles/`. Shell machine selection does
+not infer identity from hostname; the separate opt-in Firehawk visual profile can. After shared/platform/machine settings,
 zsh loads `~/.config/dotfiles/local.zsh` if present. tmux similarly loads
 `~/.config/dotfiles/tmux.local.conf`. Keep private settings there, outside Git;
 bootstrap and tests never inspect those files in your real home.

@@ -5,6 +5,13 @@ gtk-single-instance = false
 keybind = ctrl+h=unbind
 keybind = super+enter=unbind
 
+# Mac remap: physical Alt/Option is Super. Send tmux's Alt+hjkl sequences.
+# Native Alt+hjkl continues to work on keyboards without this remap.
+keybind = super+h=text:\x1bh
+keybind = super+j=text:\x1bj
+keybind = super+k=text:\x1bk
+keybind = super+l=text:\x1bl
+
 # fixes issues with sshing to Callisto
 shell-integration-features = ssh-env,ssh-terminfo
 
