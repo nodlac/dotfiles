@@ -341,7 +341,8 @@ set $ws10 "10: Clients"
 # bind program to workspace and focus to them on startup:
 assign [class="Thunar"] $ws1
 assign [class="ghostty"] $ws2
-assign [class="(?i)brave"] $ws8
+# Keep new Brave windows (including detached tabs) on the current workspace.
+# assign [class="(?i)brave"] $ws8
 assign [class="(?i)slack"] $ws9
 # assign [class="thunderbird"] $ws4
 # assign [class="TelegramDesktop"] $ws5
