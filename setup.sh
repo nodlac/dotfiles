@@ -141,7 +141,6 @@ else
     [ "$packages_requested" = no ] || install_packages
 fi
 [ "$plugins_requested" = no ] || install_plugins
-[ "$infisical_requested" = no ] || install_infisical
 # Record this machine's identity so `dtf pull` can re-preview the same plan.
 # One-time decisions (--replace, installs) are deliberately not recorded.
 setup_args="--machine $machine --profile $profile${work_os:+ --confirm-work-os $work_os}"
@@ -150,6 +149,7 @@ if [ ! -f "$args_file" ] || [ "$(cat "$args_file")" != "$setup_args" ]; then
     mkdir -p "${args_file%/*}"
     printf '%s\n' "$setup_args" > "$args_file"
 fi
+[ "$infisical_requested" = no ] || install_infisical
 log 'Setup complete. Start zsh (or restart it); tmux config applies to new servers.'
 log 'No login-shell, Git, credential, service or OS-default changes were made.'
 log 'Local overrides: ~/.config/dotfiles/local.zsh and tmux.local.conf (never managed by setup).'
