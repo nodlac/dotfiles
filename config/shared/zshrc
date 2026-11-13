@@ -52,7 +52,7 @@ alias python=python3
 alias tmux-start='tmux new-session -A -s notes'
 alias settings='tmux new-session -A -s settings'
 dotfiles-setup() { bash "$DOTFILES_ROOT/setup.sh" "$@"; }
-PS1='%F{blue}%~%f $ '
+PS1='%F{green}%m%f %F{blue}%~%f $ '
 
 # Nudge when the checkout is behind its upstream. TTY-only, so scripts, tests
 # and non-interactive shells never trigger output or the daily background fetch.
