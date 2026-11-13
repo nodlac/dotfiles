@@ -1,0 +1,16 @@
+* {
+  bg: @@panel@@;
+  fg: @@white@@;
+  accent: @@orange@@;
+  background-color: @bg;
+  text-color: @fg;
+  font: "Noto Sans Mono 12";
+}
+window { width: 640px; border: 2px; border-color: @accent; border-radius: 6px; padding: 18px; }
+mainbox { spacing: 12px; }
+inputbar { children: [prompt, entry]; spacing: 12px; }
+prompt { text-color: @accent; }
+listview { lines: 9; spacing: 4px; }
+element { padding: 10px; border-radius: 3px; }
+element selected.normal { background-color: @accent; text-color: @@hull@@; }
+element-text { background-color: inherit; text-color: inherit; }

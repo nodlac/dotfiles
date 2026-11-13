@@ -1,0 +1,13 @@
+@import "../colors.css";
+* { font-family: "Noto Sans Mono", monospace; font-size: 12px; border: none; border-radius: 0; min-height: 0; }
+window#waybar { background: @panel; color: @white; border: 1px solid @steel; border-bottom: 2px solid @orange; border-radius: 6px; }
+#custom-identity { color: @orange; font-weight: bold; padding: 0 18px; }
+#custom-downloads, #custom-screenshots { color: @white; padding: 0 12px; }
+#custom-downloads:hover, #custom-screenshots:hover { color: @orange; background: @hull; }
+#workspaces button { color: @steel; padding: 0 10px; background: transparent; }
+#workspaces button.active { color: @hull; background: @orange; }
+#workspaces button.urgent { background: @alert; color: @hull; }
+#clock { color: @white; font-weight: bold; }
+#cpu, #memory, #pulseaudio, #network, #tray, #custom-notifications { padding: 0 12px; }
+#pulseaudio.muted, #network.disconnected { color: @alert; }
+tooltip { background: @panel; color: @white; border: 1px solid @orange; }

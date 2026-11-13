@@ -30,7 +30,7 @@ jobs:
       - name: Test as an ordinary user inside Arch Linux
         run: |
           docker run --rm -v "$PWD:/src:ro" archlinux:base bash -ec '
-            pacman -Syu --noconfirm --needed git python zsh tmux
+            pacman -Syu --noconfirm --needed git python python-pillow fontconfig noto-fonts lua zsh tmux
             useradd -m -s /bin/bash tester
-            su tester -c "cd /src && bash tests/run.sh"
+            su tester -c "cd /src && bash tests/run.sh && python -B firehawk/test_theme.py && python -B firehawk/test_recent_files.py && luac -p firehawk/templates/hypr/hyprland.lua && bash -n lib/firehawk.sh firehawk/install-packages.sh firehawk/templates/scripts/screenshot"
           '

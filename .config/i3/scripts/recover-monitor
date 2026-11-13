@@ -1,0 +1,15 @@
+#!/bin/sh
+# Log each attempt so failures can be diagnosed even after a black screen.
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/monitor-recovery"
+mkdir -p "$state_dir"
+exec >> "$state_dir/recovery.log" 2>&1
+printf '\n--- Recovery triggered: %s ---\n' "$(date -Is)"
+if command -v notify-send >/dev/null 2>&1; then
+    notify-send 'Monitor recovery' 'Shortcut received; resetting DP-1.' || :
+fi
+xrandr --output DP-1 --off
+printf 'Disable exit status: %s\n' "$?"
+sleep 2
+xrandr --output DP-1 --auto
+printf 'Enable exit status: %s\n' "$?"
+xrandr --query
