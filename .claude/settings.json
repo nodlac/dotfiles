@@ -37,16 +37,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/.claude/hooks/block-deploy.py",
-            "onFailure": "block"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
             "command": "python3 ~/.claude/hooks/block-screenshare-push.py",
             "onFailure": "block"
           }
