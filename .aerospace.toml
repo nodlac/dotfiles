@@ -82,7 +82,9 @@ run = 'layout floating'
     alt-shift-backslash = 'split vertical'
 
     # i3: $mod+Shift+f
-    alt-shift-f = 'fullscreen'
+    # AeroSpace splits tiles evenly and can't learn a fixed-width window's size
+    # (Simulator refuses resize), so after tiling, shrink the tile to the real width.
+    alt-shift-f = '''exec-and-forget aerospace layout floating tiling && [ "$(aerospace list-windows --focused --format '%{window-layout}')" != floating ] && sleep 0.3 && aerospace resize width $(osascript -e 'tell application "System Events" to tell (first process whose frontmost is true) to get item 1 of (get size of window 1)')'''
 
     # alt-s = 'layout v_accordion' # 'layout stacking' in i3
     alt-w = 'layout h_accordion' # 'layout tabbed' in i3
