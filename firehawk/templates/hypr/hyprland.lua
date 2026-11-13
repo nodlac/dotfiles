@@ -37,14 +37,38 @@ exec("SUPER + Return", "ghostty")
 exec("SUPER + D", "rofi -show drun -theme ~/.config/firehawk/current/rofi/firehawk.rasi")
 exec("SUPER + SHIFT + Escape", "hyprlock")
 hl.bind("SUPER + Q", hl.dsp.window.close())
-hl.bind("SUPER + F", hl.dsp.window.fullscreen())
+hl.bind("SUPER + SHIFT + F", hl.dsp.window.fullscreen())
 hl.bind("SUPER + SHIFT + C", hl.dsp.reload_config())
-hl.bind("SUPER + V", hl.dsp.window.float({ action = "toggle" }))
-hl.bind("SUPER + S", hl.dsp.workspace.toggle_special("scratch"))
-hl.bind("SUPER + SHIFT + S", hl.dsp.window.move({ workspace = "special:scratch" }))
+hl.bind("SUPER + SHIFT + space", hl.dsp.window.float({ action = "toggle" }))
+-- Keep i3's session keys free; scratchpad remains available on Ctrl+Super+S.
+hl.bind("SUPER + CTRL + S", hl.dsp.workspace.toggle_special("scratch"))
+hl.bind("SUPER + CTRL + SHIFT + S", hl.dsp.window.move({ workspace = "special:scratch" }))
+-- Ctrl+hjkl belongs to tmux focus, Alt/Super+hjkl to tmux pane swaps.
+for key, direction in pairs({H="left", J="down", K="up", L="right"}) do
+  hl.bind("CTRL + SHIFT + " .. key, hl.dsp.focus({ direction = direction }))
+  hl.bind("ALT + SHIFT + " .. key, hl.dsp.window.move({ direction = direction }))
+  hl.bind("SUPER + SHIFT + " .. key, hl.dsp.window.move({ direction = direction }))
+end
 for key, direction in pairs({left="left", right="right", up="up", down="down"}) do
   hl.bind("SUPER + " .. key, hl.dsp.focus({ direction = direction }))
+  hl.bind("SUPER + SHIFT + " .. key, hl.dsp.window.move({ direction = direction }))
 end
+hl.bind("SUPER + Tab", hl.dsp.focus({ workspace = "e+1" }))
+hl.bind("SUPER + SHIFT + Tab", hl.dsp.focus({ workspace = "e-1" }))
+-- Match i3's tmux sessions without embedding a machine-specific home directory.
+local function session(keys, name, directory)
+  local create = "tmux new-session -d -s " .. name
+  if directory then create = create .. ' -c "$HOME/' .. directory .. '"' end
+  exec(keys, "hyprctl dispatch 'hl.dsp.focus({workspace = 2})'; " ..
+    "tmux has-session -t =" .. name .. " 2>/dev/null || " .. create ..
+    "; tmux switch-client -t =" .. name)
+end
+session("SUPER + S", "settings")
+session("SUPER + N", "notes")
+session("SUPER + A", "agency-admin", "clients/client-dashboard")
+session("ALT + A", "agency-admin", "clients/client-dashboard")
+session("SUPER + P", "callisto")
+session("SUPER + Y", "yerba-mate")
 for i = 1, 10 do
   hl.bind("SUPER + " .. (i % 10), hl.dsp.focus({ workspace = i }))
   hl.bind("SUPER + SHIFT + " .. (i % 10), hl.dsp.window.move({ workspace = i }))
@@ -59,7 +83,12 @@ exec("XF86AudioMicMute", "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle")
 exec("Print", "bash ~/.config/firehawk/current/scripts/screenshot region-copy")
 exec("SUPER + Print", "bash ~/.config/firehawk/current/scripts/screenshot full-save")
 exec("SHIFT + Print", "bash ~/.config/firehawk/current/scripts/screenshot region-edit")
-exec("SUPER + N", "swaync-client -t")
+-- Command+Shift+3/4 on the remapped Apple keyboard, as on i3/macOS.
+exec("ALT + SHIFT + 3", "bash ~/.config/firehawk/current/scripts/screenshot full-save")
+exec("ALT + SHIFT + 4", "bash ~/.config/firehawk/current/scripts/screenshot region-edit")
+exec("ALT + CTRL + SHIFT + 3", "bash ~/.config/firehawk/current/scripts/screenshot full-copy")
+exec("ALT + CTRL + SHIFT + 4", "bash ~/.config/firehawk/current/scripts/screenshot region-copy")
+exec("SUPER + CTRL + N", "swaync-client -t")
 -- User-owned file, never generated or overwritten.
 local localfile = os.getenv("HOME") .. "/.config/firehawk/local.lua"
 local f = io.open(localfile, "r")

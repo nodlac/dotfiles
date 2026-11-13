@@ -180,31 +180,51 @@ Thus **Option+Enter** opens Ghostty and **Option+D** opens the launcher. Command
 is not Control; the remap mirrors the existing X11 setup. The Glove80 firmware
 layout and other keyboards are untouched. This does not modify X11/i3, TTY keys,
 the login screen, or a system-wide driver option. Existing Command-based i3
-screenshot bindings are separate and are not ported by this modifier remap.
+screenshot bindings are explicitly mirrored below (not provided by the modifier remap).
 
 After login, check `hyprctl devices` for the exact Apple keyboard name and options.
 If the device appears under a different name (for example via Bluetooth), adapt
 the device rule rather than applying the swap globally. Physical-key behavior
 still requires testing in the live Wayland session.
 
-## Initial bindings
+## Bindings (aligned with i3)
+
+Ctrl+hjkl focuses tmux panes; Alt/Super+hjkl is left unbound for tmux pane
+swaps. Ctrl+Shift+hjkl focuses desktop windows; Alt/Super+Shift+hjkl moves them.
+On the remapped Apple keyboard, physical Option is Super and Command is Alt.
+The shared tmux config also provides Alt+m minimize, Alt++ half-width, and Alt+=
+equal-width panes.
+
+Session shortcuts use exact names. New agency-admin sessions start in
+`$HOME/clients/client-dashboard`. The i3 `y` shortcut has inconsistent names
+(`yerba-magic` / `yerba-mate`); Firehawk uses `yerba-mate` consistently.
+
+The scratchpad and notification center are retained on non-conflicting Ctrl+Super
+chords. i3-specific rofi scripts (power menu, window menu, empty workspace,
+monitor recovery and power profiles) are not ported by these bindings.
 
 | Keys | Action |
 |---|---|
 | Super+Enter | Ghostty |
 | Super+D | App launcher |
 | Super+Q | Close window |
-| Super+F | Fullscreen |
-| Super+V | Toggle floating |
-| Super+arrows | Focus |
+| Super+Shift+F | Fullscreen |
+| Super+Shift+Space | Toggle floating |
+| Ctrl+Shift+h/j/k/l or Super+arrows | Focus window |
+| Alt+Shift+h/j/k/l, Super+Shift+h/j/k/l or Super+Shift+arrows | Move window |
+| Super+Tab / Super+Shift+Tab | Next / previous occupied workspace |
 | Super+1…0 | Workspace |
 | Super+Shift+1…0 | Move to workspace |
-| Super+S / Super+Shift+S | Show scratch workspace / move window there |
+| Super+S / N / A / P / Y | tmux: settings / notes / agency-admin / callisto / yerba-mate |
+| Alt+A | agency-admin (i3 alternative) |
+| Super+Ctrl+S / Super+Ctrl+Shift+S | Show scratch workspace / move window there |
 | Super+mouse drag | Move/resize |
-| Super+N | Notification center |
+| Super+Ctrl+N | Notification center |
 | Print | Region screenshot to clipboard |
 | Super+Print | Full screenshot to ~/Pictures/Screenshots |
 | Shift+Print | Region screenshot in Swappy |
+| Alt+Shift+3 / 4 | Full screenshot saved / region screenshot in Swappy |
+| Alt+Ctrl+Shift+3 / 4 | Full / region screenshot to clipboard |
 | Super+Shift+Escape | Lock |
 | Super+Shift+C | Reload Hyprland config |
 

@@ -78,6 +78,70 @@ class ThemeTests(unittest.TestCase):
         self.assertEqual(mapping, (output / 'hypr/keyboards.lua').read_text())
         self.assertIn('/hypr/keyboards.lua', (output / 'hypr/hyprland.lua').read_text())
 
+    def test_desktop_bindings_match_i3_without_stealing_tmux_keys(self):
+        import shutil
+        import subprocess
+        lua = shutil.which('lua')
+        if not lua:
+            self.skipTest('Lua unavailable')
+        # Evaluate loops and catch duplicate chords, not just matching source text.
+        # This mocks API dispatch construction, not Hyprland API validation.
+        harness = r'''
+local bindings = {}
+local function dispatcher(args) return args or {} end
+hl = {
+  monitor = dispatcher, env = dispatcher, config = dispatcher, on = dispatcher,
+  bind = function(keys, action)
+    assert(not bindings[keys], "duplicate binding: " .. keys)
+    bindings[keys] = action
+  end,
+  dsp = {
+    exec_cmd = function(command) return {command = command} end,
+    focus = dispatcher, reload_config = dispatcher,
+    workspace = {toggle_special = dispatcher},
+    window = {close = dispatcher, fullscreen = dispatcher, float = dispatcher,
+              move = dispatcher, drag = dispatcher, resize = dispatcher},
+  },
+}
+local load_config = dofile
+dofile = function() return {} end
+io.open = function() return nil end
+load_config(arg[1])
+for key, direction in pairs({H='left', J='down', K='up', L='right'}) do
+  assert(not bindings['SUPER + ' .. key])
+  assert(not bindings['ALT + ' .. key])
+  assert(not bindings['CTRL + ' .. key])
+  assert(bindings['CTRL + SHIFT + ' .. key].direction == direction)
+  assert(bindings['ALT + SHIFT + ' .. key].direction == direction)
+  assert(bindings['SUPER + SHIFT + ' .. key].direction == direction)
+end
+for key, name in pairs({S='settings', N='notes', A='agency-admin', P='callisto', Y='yerba-mate'}) do
+  local command = bindings['SUPER + ' .. key].command
+  assert(command:find('workspace = 2', 1, true))
+  assert(command:find('has-session -t =' .. name, 1, true))
+  assert(command:find('new-session -d -s ' .. name, 1, true))
+  assert(command:find('switch-client -t =' .. name, 1, true))
+end
+assert(bindings['SUPER + A'].command:find('$HOME/clients/client-dashboard', 1, true))
+assert(bindings['SUPER + SHIFT + F'])
+assert(bindings['SUPER + SHIFT + space'])
+assert(bindings['SUPER + CTRL + N'])
+assert(bindings['SUPER + CTRL + S'])
+assert(bindings['SUPER + Tab'].workspace == 'e+1')
+assert(bindings['SUPER + SHIFT + Tab'].workspace == 'e-1')
+for _, key in ipairs({'left', 'right', 'up', 'down'}) do
+  assert(bindings['SUPER + ' .. key].direction == key)
+  assert(bindings['SUPER + SHIFT + ' .. key].direction == key)
+end
+for _, chord in ipairs({'ALT + SHIFT + 3', 'ALT + SHIFT + 4',
+                       'ALT + CTRL + SHIFT + 3', 'ALT + CTRL + SHIFT + 4'}) do
+  assert(bindings[chord].command:find('/scripts/screenshot', 1, true))
+end
+'''
+        result = subprocess.run([lua, '-', str(theme.ROOT / 'templates/hypr/hyprland.lua')],
+                                input=harness, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_apply_is_idempotent_and_repairs_corruption(self):
         first = theme.apply_theme(self.home, 'behemoth')
         second = theme.apply_theme(self.home, 'behemoth')

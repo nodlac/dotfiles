@@ -693,6 +693,26 @@ class SourceChecks(unittest.TestCase):
         karabiner = json.loads((ROOT / '.config/karabiner/assets/complex_modifications/linux-ctrl-swap.json').read_text())
         self.assertIn('mitchellh', json.dumps(karabiner))
 
+    def test_aerospace_matches_i3_tmux_shortcuts(self):
+        config = (ROOT / '.aerospace.toml').read_text()
+        bindings = dict(re.findall(r'^\s*([a-z0-9-]+)\s*=\s*(.+)$', config, re.M))
+        for key, direction in zip('hjkl', ['left', 'down', 'up', 'right']):
+            self.assertNotIn('alt-' + key, bindings)
+            self.assertIn('focus --boundaries-action wrap-around-the-workspace ' + direction,
+                          bindings['ctrl-shift-' + key])
+            self.assertEqual(bindings['alt-shift-' + key], "'move " + direction + "'")
+        for key, session in {'s': 'settings', 'n': 'notes', 'a': 'agency-admin',
+                             'p': 'callisto', 'y': 'yerba-mate'}.items():
+            command = bindings['alt-' + key]
+            self.assertIn("'workspace 2'", command)
+            self.assertIn('has-session -t =' + session, command)
+            self.assertIn('new-session -d -s ' + session, command)
+            self.assertIn('switch-client -t =' + session, command)
+        self.assertIn('$HOME/clients/client-dashboard', bindings['alt-a'])
+        for obsolete in ['v-web', 'v-backend', 'v-apple', 'v-android', 'v-hoover',
+                         'v-control-center', 'v-psql', 'tunnels']:
+            self.assertNotIn(obsolete, config)
+
     def test_managed_runtime_does_not_load_env_or_private_profiles(self):
         paths = [ROOT / 'setup.sh', ROOT / 'lib/setup.sh']
         for directory in ['config/shared', 'platform', 'machines']:
