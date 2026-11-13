@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Limited startup capture: device metadata, monitor/config state and compositor log.
+# No evtest/key-event capture, file listings, environment dumps or network requests.
+set -uo pipefail
+umask 077
+base="$HOME/.local/state/ember/diagnostics"
+mkdir -p "$base" || exit 1
+run=$(mktemp -d "$base/session-$(date +%Y%m%d-%H%M%S).XXXXXX") || exit 1
+printf 'Kernel: %s\n' "$(uname -r)" > "$run/system.txt"
+printf 'Session type: %s\n' "${XDG_SESSION_TYPE:-unknown}" >> "$run/system.txt"
+if command -v nvidia-smi >/dev/null; then
+    timeout 3 nvidia-smi --query-gpu=name,driver_version --format=csv,noheader >> "$run/system.txt" 2>&1 || true
+fi
+signature=${HYPRLAND_INSTANCE_SIGNATURE:-}
+[[ -n "$signature" && "$signature" != */* ]] || exit 1
+runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr/$signature"
+# Keep evidence outside /run so a reboot doesn't destroy the failed-session log.
+for ((step=0; step<12; step++)); do
+    if [[ -r "$runtime/hyprland.log" ]]; then
+        tail -n 2000 "$runtime/hyprland.log" > "$run/hyprland.log"
+    fi
+    if [[ ! -d "$runtime" && "$step" -gt 0 ]]; then break; fi
+    timeout 3 hyprctl -j devices > "$run/devices-$step.json" 2> "$run/devices-$step.error" || true
+    timeout 3 hyprctl -j monitors > "$run/monitors-$step.json" 2> "$run/monitors-$step.error" || true
+    timeout 3 hyprctl configerrors > "$run/configerrors-$step.txt" 2>&1 || true
+    sleep 5
+done

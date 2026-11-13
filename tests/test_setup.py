@@ -114,6 +114,71 @@ class SetupTests(unittest.TestCase):
     def shell(self, code):
         return run([ZSH, '-d', '-i', '-c', code], self.env)
 
+    def prepare_firehawk(self):
+        self.fake_platform('linux', 'endeavouros')
+        shutil.copy2(ROOT / 'lib/firehawk.sh', self.repo / 'lib/firehawk.sh')
+        for name in ['firehawk/theme', 'firehawk/profiles', 'firehawk/templates', 'firehawk/assets/brand']:
+            shutil.copytree(ROOT / name, self.repo / name)
+        shutil.copy2(ROOT / 'firehawk/firehawk-theme', self.repo / 'firehawk/firehawk-theme')
+        (self.repo / '.config/ghostty').mkdir(parents=True)
+        (self.repo / '.config/ghostty/config').write_text('# fixture\n')
+
+    def test_firehawk_dry_run_has_no_writes(self):
+        self.prepare_firehawk()
+        before = snapshot(self.home)
+        result = self.setup('--profile', 'desktop', '--desktop', 'firehawk', '--theme-profile', 'behemoth', '--dry-run')
+        self.assertIn('THEME', result.stdout)
+        self.assertIn('/.config/hypr', result.stdout)
+        self.assertNotIn('/.config/i3', result.stdout)
+        self.assertEqual(snapshot(self.home), before)
+
+    def test_firehawk_conflict_prevents_generation(self):
+        self.prepare_firehawk()
+        (self.home / '.config/waybar').mkdir(parents=True)
+        (self.home / '.config/waybar/custom').write_text('keep')
+        before = snapshot(self.home)
+        result = self.setup('--profile', 'desktop', '--desktop', 'firehawk', ok=False)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(snapshot(self.home), before)
+
+    def test_firehawk_package_plan_is_separate(self):
+        self.prepare_firehawk()
+        bindir = self.base / 'bin'
+        bindir.mkdir()
+        pacman = bindir / 'pacman'
+        pacman.write_text('#!/bin/sh\nexit 99\n')
+        pacman.chmod(0o755)
+        self.env['PATH'] = str(bindir) + os.pathsep + self.env['PATH']
+        result = self.setup('--profile', 'desktop', '--desktop', 'firehawk', '--install-packages', '--dry-run')
+        self.assertIn('hyprland', result.stdout)
+        self.assertIn('python-pillow', result.stdout)
+        self.assertNotIn('i3-wm', result.stdout)
+        self.assertEqual(snapshot(self.home), {})
+
+    def test_firehawk_requires_supported_opt_in(self):
+        for args in [('--desktop', 'firehawk'), ('--profile', 'desktop', '--desktop', 'firehawk'),
+                     ('--profile', 'desktop', '--theme-profile', 'behemoth')]:
+            self.setup(*args, ok=False)
+        self.prepare_firehawk()
+        self.setup('--profile', 'desktop', '--desktop', 'firehawk', '--theme-profile', '../../bad', ok=False)
+        self.setup('--profile', 'desktop', '--desktop', 'firehawk', '--theme-profile', 'missing', ok=False)
+        self.assertEqual(snapshot(self.home), {})
+
+    def test_firehawk_missing_source_prevents_writes(self):
+        self.prepare_firehawk()
+        (self.repo / 'firehawk/templates/hypr/hyprland.lua').unlink()
+        self.setup('--profile', 'desktop', '--desktop', 'firehawk', ok=False)
+        self.assertEqual(snapshot(self.home), {})
+
+    def test_firehawk_unsafe_state_parent_rejected(self):
+        self.prepare_firehawk()
+        outside = self.base / 'outside'
+        outside.mkdir()
+        (self.home / '.local').mkdir()
+        (self.home / '.local/state').symlink_to(outside)
+        self.setup('--profile', 'desktop', '--desktop', 'firehawk', '--replace', ok=False)
+        self.assertEqual(list(outside.iterdir()), [])
+
     def test_entrypoint_is_executable(self):
         self.assertTrue(os.access(ROOT / 'setup.sh', os.X_OK))
 
@@ -429,6 +494,52 @@ class SetupTests(unittest.TestCase):
         self.assertIn('apt-get install git curl zsh tmux', commands)
         self.assertNotIn('ghostty', commands)
 
+    def test_infisical_dry_run_has_no_side_effects(self):
+        for os_name, distro in [('linux', 'ubuntu'), ('macos', 'macos')]:
+            self.fake_platform(os_name, distro)
+            before = snapshot(self.home)
+            result = self.setup('--install-infisical', '--dry-run')
+            self.assertIn('INFISICAL 0.45.4', result.stdout)
+            self.assertEqual(snapshot(self.home), before)
+
+    def test_infisical_existing_binary_is_kept(self):
+        target = self.home / '.local/bin/infisical'
+        target.parent.mkdir(parents=True)
+        target.write_text('user-managed binary')
+        self.setup('--install-infisical')
+        self.assertEqual(target.read_text(), 'user-managed binary')
+
+    def test_infisical_install_and_checksum_failure(self):
+        bindir = self.base / 'bin'
+        bindir.mkdir()
+        self.env['PATH'] = str(bindir) + os.pathsep + self.env['PATH']
+        scripts = {
+            'curl': '#!/bin/sh\nexit 0\n',
+            'sha256sum': '#!/bin/sh\ncat >/dev/null\nexit 1\n',
+            'tar': '#!/bin/sh\nprintf "#!/bin/sh\\nexit 0\\n" > "$4/infisical"\n',
+        }
+        for name, content in scripts.items():
+            path = bindir / name
+            path.write_text(content)
+            path.chmod(0o755)
+        target = self.home / '.local/bin/infisical'
+        self.setup('--install-infisical', ok=False)
+        self.assertFalse(target.exists())
+        (bindir / 'sha256sum').write_text('#!/bin/sh\ncat >/dev/null\nexit 0\n')
+        self.setup('--install-infisical')
+        self.assertTrue(os.access(target, os.X_OK))
+        self.assertIn('#!/bin/sh', target.read_text())
+
+    def test_infisical_unsafe_parent_blocks_changes(self):
+        outside = self.base / 'outside'
+        outside.mkdir()
+        (self.home / '.local').mkdir()
+        (self.home / '.local/bin').symlink_to(outside)
+        before = snapshot(self.home)
+        self.setup('--install-infisical', ok=False)
+        self.assertEqual(snapshot(self.home), before)
+        self.assertEqual(list(outside.iterdir()), [])
+
     def test_missing_package_manifest_blocks_all_changes(self):
         (self.repo / 'platform/packages/ubuntu.txt').unlink()
         self.setup('--install-packages', ok=False)
@@ -594,6 +705,26 @@ class SourceChecks(unittest.TestCase):
             self.assertIn('keybind = ' + binding, ghostty)
         karabiner = json.loads((ROOT / '.config/karabiner/assets/complex_modifications/linux-ctrl-swap.json').read_text())
         self.assertIn('mitchellh', json.dumps(karabiner))
+
+    def test_aerospace_matches_i3_tmux_shortcuts(self):
+        config = (ROOT / '.aerospace.toml').read_text()
+        bindings = dict(re.findall(r'^\s*([a-z0-9-]+)\s*=\s*(.+)$', config, re.M))
+        for key, direction in zip('hjkl', ['left', 'down', 'up', 'right']):
+            self.assertNotIn('alt-' + key, bindings)
+            self.assertIn('focus --boundaries-action wrap-around-the-workspace ' + direction,
+                          bindings['ctrl-shift-' + key])
+            self.assertEqual(bindings['alt-shift-' + key], "'move " + direction + "'")
+        for key, session in {'s': 'settings', 'n': 'notes', 'a': 'agency-admin',
+                             'p': 'callisto', 'y': 'yerba-mate'}.items():
+            command = bindings['alt-' + key]
+            self.assertIn("'workspace 2'", command)
+            self.assertIn('has-session -t =' + session, command)
+            self.assertIn('new-session -d -s ' + session, command)
+            self.assertIn('switch-client -t =' + session, command)
+        self.assertIn('$HOME/clients/client-dashboard', bindings['alt-a'])
+        for obsolete in ['v-web', 'v-backend', 'v-apple', 'v-android', 'v-hoover',
+                         'v-control-center', 'v-psql', 'tunnels']:
+            self.assertNotIn(obsolete, config)
 
     def test_managed_runtime_does_not_load_env_or_private_profiles(self):
         paths = [ROOT / 'setup.sh', ROOT / 'lib/setup.sh']

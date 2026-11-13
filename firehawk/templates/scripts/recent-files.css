@@ -1,0 +1,7 @@
+.firehawk-files { background: @@panel@@; color: @@white@@; border: 2px solid @@orange@@; border-radius: 6px; font-family: "Noto Sans", sans-serif; font-size: 14px; }
+.firehawk-files .folder-heading { color: @@orange@@; font-family: "Noto Sans Mono", monospace; font-weight: bold; }
+.firehawk-files .file-row { border: 1px solid transparent; border-radius: 4px; }
+.firehawk-files .file-row:hover { background: @@hull@@; border-color: @@orange@@; }
+.firehawk-files .file-detail { color: @@steel@@; font-size: 11px; }
+.firehawk-files button { background: @@hull@@; color: @@white@@; border: 1px solid @@steel@@; border-radius: 4px; padding: 6px 10px; box-shadow: none; text-shadow: none; }
+.firehawk-files button:hover { color: @@orange@@; border-color: @@orange@@; }

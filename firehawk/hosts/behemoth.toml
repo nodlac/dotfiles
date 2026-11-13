@@ -1,0 +1,19 @@
+# Audit notes only — NOT automatically loaded or used as monitor/GPU overrides.
+# X11 output names may differ under Wayland. Verify in a live Hyprland session.
+[observed]
+hostname = "supernerd"
+identity = "behemoth"
+os = "EndeavourOS"
+gpu = "NVIDIA GeForce RTX 3060"
+driver_family = "nvidia-open"
+drm_modeset_enabled = true
+login_manager = "lightdm"
+current_session = "i3 / X11"
+x11_output = "DP-1"
+resolution = "2560x1440"
+x11_current_refresh_hz = 59.95
+x11_available_native_refresh_hz = [59.95, 74.96]
+
+# Initial generated config uses preferred mode and scale 1.
+# Add tested monitor overrides to ~/.config/firehawk/local.lua; do not blindly
+# reuse X11 output names or install historical NVIDIA environment workarounds.

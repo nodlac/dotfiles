@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# No persistent history. Cancellation leaves the clipboard and Pictures untouched.
+set -euo pipefail
+mode=${1:-region-copy}
+case "$mode" in region-copy|full-copy|region-save|full-save|region-edit) ;; *) echo "Invalid screenshot mode" >&2; exit 1 ;; esac
+geometry=
+case "$mode" in region-*) geometry=$(slurp) || exit 0; [[ -n "$geometry" ]] || exit 0 ;; esac
+tmp=$(mktemp "${TMPDIR:-/tmp}/firehawk-shot.XXXXXX.png")
+cleanup() { [[ -z "$tmp" ]] || rm -f -- "$tmp"; }
+trap cleanup EXIT
+if [[ -n "$geometry" ]]; then grim -g "$geometry" "$tmp"; else grim "$tmp"; fi
+case "$mode" in
+    *-copy) wl-copy --type image/png < "$tmp" ;;
+    *-save)
+        dir="$HOME/Pictures/Screenshots"
+        mkdir -p "$dir"
+        target=$(mktemp "$dir/$(date +%Y-%m-%d_%H-%M-%S)-XXXXXX.png")
+        if ! cp -- "$tmp" "$target"; then rm -f -- "$target"; exit 1; fi
+        command -v notify-send >/dev/null && notify-send "Screenshot saved" "$target" || true
+        printf '%s\n' "$target" ;;
+    region-edit) swappy -f "$tmp" ;;
+esac

@@ -14,16 +14,20 @@ usage() {
         '  --machine NAME        generic (default), behemoth, callisto, somnambulist,' \
         '                        macos, medina-station' \
         '  --profile ROLE        headless (default) or desktop (explicit opt-in)' \
+        '  --desktop NAME        i3 (Linux default) or firehawk (Arch/EndeavourOS only)' \
+        '  --theme-profile NAME  Firehawk identity: auto (default) or profile name' \
         '  --confirm-work-os OS  Required for medina-station: linux or macos' \
         '  --install-packages    Opt-in package manager actions (requires sudo on Linux)' \
         '  --install-plugins     Opt-in plugin clones; never pulls existing checkouts' \
+        '  --install-infisical   Install pinned Infisical CLI into ~/.local/bin' \
         '  --link-nvim           Opt-in existing nvim config (requires nvim >= 0.10)' \
         '  --detect              Print detection and exit without changing anything' \
         '  --help                Show help'
 }
 dry_run=no replace=no machine=generic profile=headless
-packages_requested=no plugins_requested=no nvim_requested=no
+packages_requested=no plugins_requested=no nvim_requested=no infisical_requested=no
 work_os= profile_explicit=no detect_only=no
+desktop=i3 desktop_explicit=no theme_profile=auto theme_explicit=no
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --help|-h) usage; exit 0 ;;
@@ -31,14 +35,17 @@ while [ "$#" -gt 0 ]; do
         --replace) replace=yes ;;
         --install-packages) packages_requested=yes ;;
         --install-plugins) plugins_requested=yes ;;
+        --install-infisical) infisical_requested=yes ;;
         --link-nvim) nvim_requested=yes ;;
         --detect) detect_only=yes ;;
-        --machine|--profile|--confirm-work-os)
+        --machine|--profile|--confirm-work-os|--desktop|--theme-profile)
             [ "$#" -ge 2 ] || fail "Missing value for $1"
             case "$1" in
                 --machine) machine=$2 ;;
                 --profile) profile=$2; profile_explicit=yes ;;
                 --confirm-work-os) work_os=$2 ;;
+                --desktop) desktop=$2; desktop_explicit=yes ;;
+                --theme-profile) theme_profile=$2; theme_explicit=yes ;;
             esac
             shift ;;
         *) fail "Unknown option: $1 (see --help)" ;;
@@ -70,7 +77,16 @@ case "$machine" in
     *) fail "Unknown machine: $machine" ;;
 esac
 [ "$DF_WSL" = none ] || [ "$profile" = headless ] || fail 'WSL desktop activation is not supported'
-log "Selected machine=$machine profile=$profile"
+case "$desktop" in i3|firehawk) ;; *) fail "Unknown desktop: $desktop" ;; esac
+if [ "$desktop_explicit" = yes ] || [ "$theme_explicit" = yes ]; then
+    [ "$profile" = desktop ] || fail '--desktop/--theme-profile require --profile desktop'
+    case "$DF_OS:$DF_DISTRO:$DF_WSL" in
+        linux:arch:none|linux:endeavouros:none) ;;
+        *) fail '--desktop/--theme-profile require native Arch/EndeavourOS' ;;
+    esac
+fi
+[ "$theme_explicit" = no ] || [ "$desktop" = firehawk ] || fail '--theme-profile requires --desktop firehawk'
+log "Selected machine=$machine profile=$profile desktop=$desktop"
 backup_dir="$HOME/.local/state/dotfiles/backups/$(date -u +%Y%m%dT%H%M%SZ)-$$"
 check_parents "$backup_dir/placeholder"
 sources=() targets=()
@@ -89,7 +105,13 @@ if [ "$profile" = desktop ]; then
             add_link "$ROOT/.config/karabiner/assets/complex_modifications/linux-ctrl-swap.json" "$HOME/.config/karabiner/assets/complex_modifications/linux-ctrl-swap.json" ;;
         linux)
             case "$DF_DISTRO" in
-                arch|endeavouros) add_link "$ROOT/.config/i3" "$HOME/.config/i3" ;;
+                arch|endeavouros)
+                    if [ "$desktop" = firehawk ]; then
+                        . "$ROOT/lib/firehawk.sh"
+                        plan_firehawk
+                    else
+                        add_link "$ROOT/.config/i3" "$HOME/.config/i3"
+                    fi ;;
                 *) fail 'Desktop activation is currently reviewed only for Arch/EndeavourOS and macOS' ;;
             esac ;;
     esac
@@ -102,14 +124,24 @@ link_status=0
 preflight_links || link_status=$?
 [ "$packages_requested" = no ] || plan_packages
 [ "$plugins_requested" = no ] || plan_plugins
+[ "$infisical_requested" = no ] || plan_infisical
 [ "$link_status" -eq 0 ] || exit "$link_status"
 if [ "$dry_run" = yes ]; then
     log 'Dry run complete: no changes made.'
     exit 0
 fi
-apply_links
-[ "$packages_requested" = no ] || install_packages
+if [ "$profile:$desktop" = desktop:firehawk ]; then
+    # Pillow may be supplied by the requested package transaction. Never write
+    # links to generated sources until the whole generation has succeeded.
+    [ "$packages_requested" = no ] || install_packages
+    build_firehawk
+    apply_links
+else
+    apply_links
+    [ "$packages_requested" = no ] || install_packages
+fi
 [ "$plugins_requested" = no ] || install_plugins
+[ "$infisical_requested" = no ] || install_infisical
 # Record this machine's identity so `dtf pull` can re-preview the same plan.
 # One-time decisions (--replace, installs) are deliberately not recorded.
 setup_args="--machine $machine --profile $profile${work_os:+ --confirm-work-os $work_os}"

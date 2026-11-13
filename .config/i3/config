@@ -188,6 +188,9 @@ bindsym $mod+Shift+Escape exec --no-startup-id ~/.config/i3/scripts/blur-lock
 # lock in case after sleep
 exec --no-startup-id xss-lock -l ~/.config/i3/scripts/blur-lock
 
+# Recover the DisplayPort monitor after switching inputs (Super+Ctrl+M)
+bindsym $mod+Ctrl+m exec --no-startup-id sh ~/.config/i3/scripts/recover-monitor
+
 # reload the configuration file
 bindsym $mod+Shift+c reload
 
@@ -217,13 +220,10 @@ bindsym XF86MonBrightnessDown exec --no-startup-id ~/.config/i3/scripts/volume_b
 #bindsym XF86MonBrightnessUp   exec --no-startup-id ~/.config/i3/scripts/volume_brightness2.sh screen_brightness_up
 #bindsym XF86MonBrightnessDown exec --no-startup-id ~/.config/i3/scripts/volume_brightness2.sh screen_brightness_down
 
-# change focus
-bindsym $mod+h focus left
-bindsym $mod+j focus down
-bindsym $mod+k focus up
-bindsym $mod+l focus right
-
-# Ctrl+Shift+hjkl for focus
+# Leave unshifted Mod1/Mod4+hjkl to the terminal for tmux pane swaps.
+# On the Mac keyboard, physical Alt/Option is remapped to Mod4 (Super).
+# Direction keys: h/j/k/l = left/down/up/right.
+# Ctrl focuses tmux panes; Ctrl+Shift focuses i3 windows.
 bindsym Control+Shift+h focus left
 bindsym Control+Shift+j focus down
 bindsym Control+Shift+k focus up
@@ -235,7 +235,13 @@ bindsym $mod+Down focus down
 bindsym $mod+Up focus up
 bindsym $mod+Right focus right
 
-# move focused window
+# Alt swaps tmux panes; Alt+Shift moves the focused i3 window.
+bindsym Mod1+Shift+h move left
+bindsym Mod1+Shift+j move down
+bindsym Mod1+Shift+k move up
+bindsym Mod1+Shift+l move right
+
+# Keep Super+Shift as an alternative for moving i3 windows.
 bindsym $mod+Shift+h move left
 bindsym $mod+Shift+j move down
 bindsym $mod+Shift+k move up
@@ -307,7 +313,13 @@ bindsym XF86AudioPrev exec --no-startup-id playerctl previous
 ## App shortcuts
 # bindsym $mod+w exec --no-startup-id /usr/bin/firefox
 # bindsym $mod+n exec --no-startup-id /usr/bin/thunar
-bindsym $mod+Ctrl+Shift+3 exec --no-startup-id scrot ~/%Y-%m-%d-%T-screenshot.png && notify-send "Screenshot saved to ~/$(date +"%Y-%m-%d-%T")-screenshot.png"
+# macOS-style Flameshot screenshots.
+# The Mac keyboard remap maps physical Command to Mod1 (not $mod/Mod4).
+# Use keycodes for the number row; release modifiers before capturing.
+bindcode --release Mod1+Shift+12 exec --no-startup-id flameshot full --path ~/Pictures/Screenshots
+bindcode --release Mod1+Shift+13 exec --no-startup-id flameshot gui --path ~/Pictures/Screenshots
+bindcode --release Mod1+Ctrl+Shift+12 exec --no-startup-id flameshot full --clipboard
+bindcode --release Mod1+Ctrl+Shift+13 exec --no-startup-id flameshot gui --clipboard
 
 # Power Profiles menu switcher (rofi)
 bindsym $mod+Shift+p exec --no-startup-id ~/.config/i3/scripts/power-profiles
@@ -325,9 +337,9 @@ set $ws4 "4:"
 set $ws5 "5:"
 set $ws6 "6"
 set $ws7 "7"
-set $ws8 "8"
+set $ws8 "8:"
 set $ws9 "9:"
-set $ws10 "10"
+set $ws10 "10: Clients"
 
 # use workspaces on different displays:
 # where you have to replace VGA-0/HDMI-0 with the names for your displays
@@ -341,7 +353,8 @@ set $ws10 "10"
 # bind program to workspace and focus to them on startup:
 assign [class="Thunar"] $ws1
 assign [class="ghostty"] $ws2
-assign [class="(?i)brave"] $ws3
+# Keep new Brave windows (including detached tabs) on the current workspace.
+# assign [class="(?i)brave"] $ws8
 assign [class="(?i)slack"] $ws9
 # assign [class="thunderbird"] $ws4
 # assign [class="TelegramDesktop"] $ws5
@@ -621,8 +634,9 @@ exec_always --no-startup-id bash -c 'source ~/.env && [ "$KEYBOARD_TYPE" = "mac"
 #####################################
 # TMUX Workspaces (creates session if missing)
 #####################################
+bindsym Mod1+a exec --no-startup-id "i3-msg 'workspace 2:'; tmux has-session -t =agency-admin 2>/dev/null || tmux new-session -d -s agency-admin -c /home/behemoth/clients/client-dashboard; tmux switch-client -t agency-admin"
 bindsym $mod+s exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t settings || tmux new-session -d -s settings && tmux switch-client -t settings"
 bindsym $mod+n exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t notes || tmux new-session -d -s notes && tmux switch-client -t notes"
-bindsym $mod+a exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t AOC || tmux new-session -d -s AOC && tmux switch-client -t AOC"
+bindsym $mod+a exec --no-startup-id "i3-msg 'workspace 2:'; tmux has-session -t =agency-admin 2>/dev/null || tmux new-session -d -s agency-admin -c /home/behemoth/clients/client-dashboard; tmux switch-client -t agency-admin"
 bindsym $mod+p exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t callisto || tmux new-session -d -s callisto && tmux switch-client -t callisto
 bindsym $mod+y exec --no-startup-id "i3-msg 'workspace 2:'; tmux switch-client -t yerba-magic || tmux new-session -d -s yerba-mate && tmux switch-client -t yerba-mate"
