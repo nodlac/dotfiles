@@ -28,3 +28,6 @@ keybind = ctrl+backspace=text:\x17
 
 # Drops underlines lower in the cell: gap between the tmux todo header and its bar.
 adjust-underline-position = 4
+
+keybind = ctrl+shift+n=new_window
+keybind = ctrl+shift+t=new_tab
