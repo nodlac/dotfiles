@@ -111,6 +111,16 @@ else
 fi
 bindkey "^[[1;5D" backward-word
 bindkey "^[[1;5C" forward-word
+# vi yanks only fill zsh's CUTBUFFER; outside tmux copy-mode nothing reaches the system clipboard.
+if (( $+commands[pbcopy] )); then _clip_cmd=(pbcopy)
+elif [[ -n $WAYLAND_DISPLAY ]] && (( $+commands[wl-copy] )); then _clip_cmd=(wl-copy)
+elif (( $+commands[xclip] )); then _clip_cmd=(xclip -selection clipboard)
+fi
+if (( $#_clip_cmd )); then
+    _clip_yank() { zle .$WIDGET; print -rn -- "$CUTBUFFER" | "${_clip_cmd[@]}" }
+    for _w in vi-yank vi-yank-whole-line vi-yank-eol; do zle -N $_w _clip_yank; done
+    unset _w
+fi
 zle-keymap-select() {
     [[ -t 1 ]] || return 0
     if [[ $KEYMAP = vicmd ]]; then print -n -- '\e[2 q'
