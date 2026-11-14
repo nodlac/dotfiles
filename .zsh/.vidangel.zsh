@@ -3,19 +3,25 @@
 # Tardis Autocomplete
 ##########################################################
 #
-fpath=( ~/vidangel-repo/tiny-tardis/.completions/zsh $fpath )
-autoload -U compinit; compinit
+# Register before the shared shell runs compinit; a missing work checkout is OK.
+[[ ! -d "$HOME/vidangel-repo/tiny-tardis/.completions/zsh" ]] ||
+    fpath=( "$HOME/vidangel-repo/tiny-tardis/.completions/zsh" $fpath )
 
 ##########################################################
 # Internal helpers (idempotent building blocks)
 ##########################################################
 _va_ensure_colima() {
+    # Linux uses the native Docker daemon; Colima is a macOS implementation detail.
+    if [[ $OSTYPE != darwin* ]]; then
+        docker info >/dev/null 2>&1 || { echo 'Start the Docker daemon first.'; return 1; }
+        return 0
+    fi
     if colima status &>/dev/null; then
         echo "  Colima already running"
     else
         echo "  Starting Colima..."
-        # Default 2G/2CPU VM starves postgres; sized for a 32G/10-core Mac.
-        colima start --cpu 6 --memory 12
+        # Let Colima choose defaults; larger machines can opt into more resources.
+        colima start --cpu "${VA_COLIMA_CPUS:-2}" --memory "${VA_COLIMA_MEMORY:-4}"
     fi
 }
 
@@ -660,25 +666,39 @@ vidangel-celery-worker() {
 ##########################################################
 # Agent task management
 ##########################################################
-source ~/repos/agent-tools/agent-tools.sh
+[[ ! -r "$HOME/repos/agent-tools/agent-tools.sh" ]] || source "$HOME/repos/agent-tools/agent-tools.sh"
 
 ##########################################################
 # Work exports
 ##########################################################
-export JAVA_HOME=$(/usr/libexec/java_home -v 17)
-export ANDROID_HOME=$HOME/Library/Android/sdk
+if [[ $OSTYPE == darwin* ]]; then
+    if [[ -x /usr/libexec/java_home ]]; then
+        _va_java_home=$(/usr/libexec/java_home -v 17 2>/dev/null)
+        [[ -z $_va_java_home ]] || export JAVA_HOME=$_va_java_home
+        unset _va_java_home
+    fi
+    export ANDROID_HOME=${ANDROID_HOME:-$HOME/Library/Android/sdk}
+else
+    export ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk}
+fi
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+# Zsh completion is initialized once by the shared shell.
 export BIM_CONN="host='127.0.0.1' port=24601 dbname='vidangel' user='$BIM_USER' password='$BIM_PASS'"
 export FINNEGAN_CONN="host='127.0.0.1' port=24603 dbname='vidangel' user='$FINNEGAN_USER' password='$FINNEGAN_PASS'"
 
 ##########################################################
 # PATH extensions
 ##########################################################
-export PATH=$PATH:$ANDROID_HOME/platform-tools
-export PATH="/opt/homebrew/opt/ruby/bin:$PATH"
-export PATH="$PATH:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools"
+for _va_bin in "$ANDROID_HOME/platform-tools" "$ANDROID_HOME/emulator"; do
+    [[ ! -d $_va_bin ]] || path+=("$_va_bin")
+done
+if [[ $OSTYPE == darwin* ]]; then
+    for _va_bin in /opt/homebrew/opt/ruby/bin /usr/local/opt/ruby/bin; do
+        [[ ! -d $_va_bin ]] || path=("$_va_bin" $path)
+    done
+fi
+unset _va_bin
 
 ##########################################################
 # Work Alias
@@ -693,6 +713,7 @@ alias va-management='eva -i i-00d603407628a0d0e'
 # which would otherwise make zsh choke parsing the function definition below.
 unalias vault-refresh-token 2>/dev/null
 vault-refresh-token() { vault login -method=userpass username="$VAULT_USER" password="$VAULT_PASS"; }
-alias p-bim="pgcli -h localhost -p 24603 -d vidangel -u $FINNEGAN_USER -W $FINNEGAN_PASS"
+# Resolve credentials at invocation time, not during shell startup.
+p-bim() { pgcli -h localhost -p 24603 -d vidangel -u "$FINNEGAN_USER"; }
 alias p-finnegan=""
 

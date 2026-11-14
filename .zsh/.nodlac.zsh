@@ -3,8 +3,12 @@
 #########################################################
 
 llama-start() {
-  nohup ~/llama.cpp/build-cuda/bin/llama-server \
-    --models-dir ~/llm-models \
+  local server=${LLAMA_SERVER_BIN:-}
+  [[ -n $server ]] || server=$(command -v llama-server)
+  [[ -n $server ]] || { echo 'Install llama-server or set LLAMA_SERVER_BIN.'; return 1; }
+  mkdir -p "$HOME/logs" || return 1
+  nohup "$server" \
+    --models-dir "${LLAMA_MODELS_DIR:-$HOME/llm-models}" \
     --host 127.0.0.1 \
     --port 9931 \
     --jinja \
@@ -22,7 +26,9 @@ llama-stop() {
 
 llama-status() {
     curl -s http://127.0.0.1:9931/health && echo
-    nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader
+    fi
 }
 
 llama-restart() {

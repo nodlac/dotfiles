@@ -84,8 +84,11 @@ class SetupTests(unittest.TestCase):
         self.home.mkdir()
         self.repo = self.base / 'repo with spaces'
         self.repo.mkdir()
-        # Never copy arbitrary tracked files, credentials or private work configs.
-        for name in ['setup.sh', 'lib/setup.sh', 'platform/detect.sh',
+        # Explicit allowlist: approved profiles, never credentials or private notes.
+        for name in ['setup.sh', 'lib/setup.sh', 'lib/provision.sh', 'platform/detect.sh',
+                     '.zsh/.nodlac.zsh', '.zsh/.vidangel.zsh',
+                     '.dotfiles/.npmrc', '.dotfiles/.brave-bookmarks.html',
+                     'config/optional/helpers.zsh',
                      'platform/linux.zsh', 'platform/macos.zsh']:
             target = self.repo / name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -179,6 +182,43 @@ class SetupTests(unittest.TestCase):
         self.setup('--profile', 'desktop', '--desktop', 'firehawk', '--replace', ok=False)
         self.assertEqual(list(outside.iterdir()), [])
 
+    def test_helpers_opt_in_and_dry_run(self):
+        before = snapshot(self.home)
+        result = self.setup('--enable-helpers', '--dry-run')
+        self.assertIn('helpers.zsh', result.stdout)
+        self.assertEqual(snapshot(self.home), before)
+        self.setup('--enable-helpers')
+        link = self.home / '.config/dotfiles/helpers.zsh'
+        self.assertEqual(link.resolve(), self.repo / 'config/optional/helpers.zsh')
+        self.setup('--skip-helpers')
+        self.assertTrue(link.is_symlink())
+
+    @unittest.skipUnless(ZSH, 'zsh unavailable')
+    def test_profiles_load_on_fresh_device(self):
+        self.setup('--enable-helpers')
+        result = self.shell('(( $+functions[llama-start] && $+functions[vidangel-start-backend] '
+                            '&& $+functions[sqlrun] && $+functions[cloudflared-start] ))')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, '')
+        self.assertEqual(result.stdout, '')
+
+    def test_system_provisioning_dry_run(self):
+        self.fake_platform('macos', 'macos')
+        (self.repo / '.config/ghostty').mkdir(parents=True)
+        (self.repo / '.aerospace.toml').write_text('# fixture')
+        asset = self.repo / '.config/karabiner/assets/complex_modifications/linux-ctrl-swap.json'
+        asset.parent.mkdir(parents=True)
+        asset.write_text('{}')
+        bindir = self.base / 'bin'
+        bindir.mkdir()
+        tool = bindir / 'defaults'
+        tool.write_text('#!/bin/sh\nexit 99\n')
+        tool.chmod(0o755)
+        self.env['PATH'] = str(bindir) + os.pathsep + self.env['PATH']
+        result = self.setup('--profile', 'desktop', '--configure-system', '--dry-run')
+        self.assertIn('SYSTEM  macOS', result.stdout)
+        self.assertEqual(snapshot(self.home), {})
+
     def test_entrypoint_is_executable(self):
         self.assertTrue(os.access(ROOT / 'setup.sh', os.X_OK))
 
@@ -196,7 +236,8 @@ class SetupTests(unittest.TestCase):
 
     @unittest.skipUnless(ZSH, 'zsh unavailable')
     def test_canonical_shell_loads_without_legacy_tree(self):
-        self.assertFalse((self.repo / '.dotfiles').exists())
+        # Only portable assets remain under .dotfiles, not a legacy Git directory.
+        self.assertFalse((self.repo / '.dotfiles/HEAD').exists())
         self.setup()
         for name, source in [('.zshrc', 'zshrc'), ('.zshenv', 'zshenv')]:
             self.assertEqual((self.home / name).resolve(), self.repo / 'config/shared' / source)
@@ -726,14 +767,15 @@ class SourceChecks(unittest.TestCase):
                          'v-control-center', 'v-psql', 'tunnels']:
             self.assertNotIn(obsolete, config)
 
-    def test_managed_runtime_does_not_load_env_or_private_profiles(self):
+    def test_managed_runtime_does_not_implicitly_load_credentials(self):
         paths = [ROOT / 'setup.sh', ROOT / 'lib/setup.sh']
         for directory in ['config/shared', 'platform', 'machines']:
             paths += [p for p in (ROOT / directory).rglob('*') if p.is_file()]
         for p in paths:
             content = p.read_text()
             self.assertNotIn('.env', content, str(p))
-            self.assertNotIn('.vidangel.zsh', content, str(p))
+            # Personal/work function definitions are now approved shared defaults.
+            # Credential rendering in those functions must remain explicitly invoked.
             self.assertNotRegex(content, r'(?m)^\s*alias\s+df=')
 
 

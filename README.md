@@ -21,6 +21,35 @@ anything or change your login shell. Install zsh/tmux first or explicitly reques
 packages; start `zsh` to use the environment. Desktop tools are opt-in even on a
 laptop. See [platform commands](docs/PLATFORMS.md) for machine-specific options.
 
+### Device-independent setup
+
+No hostname preset is required: OS detection selects Linux/macOS behavior, and
+both approved personal/work shell profiles load on every device. Missing optional
+tools are guarded. Local-only settings can stay in `~/.config/dotfiles/local.zsh`.
+
+For a supported workstation (Homebrew must already exist on macOS):
+
+```sh
+./setup.sh --profile desktop --install-packages --install-plugins --enable-helpers --dry-run
+./setup.sh --profile desktop --install-packages --install-plugins --enable-helpers
+```
+
+Interactive setup asks whether to enable SQL/Cloudflare helpers; noninteractive
+runs require `--enable-helpers`. `--skip-helpers` suppresses the question and keeps
+existing selections. Enabling only defines functions: credentials and external
+services are still your responsibility. No automatic `~/.env` loading is added.
+
+`--configure-system` separately opts into Linux service activation or macOS
+keyboard defaults; preview it with `--dry-run`. Linux headless enables Docker;
+Linux desktop additionally enables NetworkManager and Bluetooth. Install the
+service packages first or request package installation. macOS requires desktop
+mode and may need logout/login. This does not yet cover every legacy provisioning
+task. See [setup roadmap](docs/SETUP_ROADMAP.md), including the **MacBook latest
+setup audit** and deferred **Infisical -> `~/.env`** integration.
+
+Setup also links the portable npm config and browser bookmark export; existing
+user files still require explicit conflict review/`--replace`.
+
 ### Preview, conflicts, and reruns
 
 ```sh

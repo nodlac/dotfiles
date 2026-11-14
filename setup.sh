@@ -17,6 +17,9 @@ usage() {
         '  --desktop NAME        i3 (Linux default) or firehawk (Arch/EndeavourOS only)' \
         '  --theme-profile NAME  Firehawk identity: auto (default) or profile name' \
         '  --confirm-work-os OS  Required for medina-station: linux or macos' \
+        '  --enable-helpers      Enable SQL / Cloudflare functions (also offered on a TTY)' \
+        '  --skip-helpers        Skip the helper prompt; retain any existing selection' \
+        '  --configure-system    Opt-in OS defaults / systemd services; preview with --dry-run' \
         '  --install-packages    Opt-in package manager actions (requires sudo on Linux)' \
         '  --install-plugins     Opt-in plugin clones; never pulls existing checkouts' \
         '  --install-infisical   Install pinned Infisical CLI into ~/.local/bin' \
@@ -27,12 +30,16 @@ usage() {
 dry_run=no replace=no machine=generic profile=headless
 packages_requested=no plugins_requested=no nvim_requested=no infisical_requested=no
 work_os= profile_explicit=no detect_only=no
+helpers_requested=ask system_requested=no
 desktop=i3 desktop_explicit=no theme_profile=auto theme_explicit=no
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --help|-h) usage; exit 0 ;;
         --dry-run) dry_run=yes ;;
         --replace) replace=yes ;;
+        --enable-helpers) helpers_requested=yes ;;
+        --skip-helpers) helpers_requested=no ;;
+        --configure-system) system_requested=yes ;;
         --install-packages) packages_requested=yes ;;
         --install-plugins) plugins_requested=yes ;;
         --install-infisical) infisical_requested=yes ;;
@@ -90,6 +97,19 @@ log "Selected machine=$machine profile=$profile desktop=$desktop"
 backup_dir="$HOME/.local/state/dotfiles/backups/$(date -u +%Y%m%dT%H%M%SZ)-$$"
 check_parents "$backup_dir/placeholder"
 sources=() targets=()
+if [ "$helpers_requested" = ask ] && [ "$dry_run" = no ] && [ -t 0 ] && [ -t 1 ] &&
+    [ ! -e "$HOME/.config/dotfiles/helpers.zsh" ] && [ ! -L "$HOME/.config/dotfiles/helpers.zsh" ]; then
+    printf 'Enable SQL / Cloudflare helpers? Defines functions only; needs Docker/psql and separately supplied credentials. [y/N] '
+    answer=
+    read -r answer || true
+    case "$answer" in y|Y|yes|YES) helpers_requested=yes ;; esac
+fi
+if [ "$helpers_requested" = yes ]; then
+    add_link "$ROOT/config/optional/helpers.zsh" "$HOME/.config/dotfiles/helpers.zsh"
+fi
+# Preserve user-owned npm settings unless replacement is explicitly approved.
+add_link "$ROOT/.dotfiles/.npmrc" "$HOME/.npmrc"
+add_link "$ROOT/.dotfiles/.brave-bookmarks.html" "$HOME/.brave-bookmarks.html"
 add_link "$ROOT" "$HOME/.local/share/dotfiles"
 add_link "$ROOT/config/shared/zshenv" "$HOME/.zshenv"
 add_link "$ROOT/config/shared/zshrc" "$HOME/.zshrc"
@@ -125,6 +145,10 @@ preflight_links || link_status=$?
 [ "$packages_requested" = no ] || plan_packages
 [ "$plugins_requested" = no ] || plan_plugins
 [ "$infisical_requested" = no ] || plan_infisical
+if [ "$system_requested" = yes ]; then
+    . "$ROOT/lib/provision.sh"
+    plan_system
+fi
 [ "$link_status" -eq 0 ] || exit "$link_status"
 if [ "$dry_run" = yes ]; then
     log 'Dry run complete: no changes made.'
@@ -150,6 +174,8 @@ if [ ! -f "$args_file" ] || [ "$(cat "$args_file")" != "$setup_args" ]; then
     printf '%s\n' "$setup_args" > "$args_file"
 fi
 [ "$infisical_requested" = no ] || install_infisical
+[ "$system_requested" = no ] || configure_system
 log 'Setup complete. Start zsh (or restart it); tmux config applies to new servers.'
-log 'No login-shell, Git, credential, service or OS-default changes were made.'
+log 'No login-shell, Git or credential changes were made.'
+[ "$system_requested" = yes ] || log 'No service or OS-default changes were made.'
 log 'Local overrides: ~/.config/dotfiles/local.zsh and tmux.local.conf (never managed by setup).'

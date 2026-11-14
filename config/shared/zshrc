@@ -79,6 +79,12 @@ if detect_platform; then
 fi
 [[ ! -r "$HOME/.config/dotfiles/machine.zsh" ]] || source "$HOME/.config/dotfiles/machine.zsh"
 
+# User-approved profiles are shared across devices, not selected by hostname.
+# Source before compinit so work completions join the same initialization pass.
+source "$DOTFILES_ROOT/.zsh/.nodlac.zsh"
+source "$DOTFILES_ROOT/.zsh/.vidangel.zsh"
+[[ ! -r "$HOME/.config/dotfiles/helpers.zsh" ]] || source "$HOME/.config/dotfiles/helpers.zsh"
+
 # Plugins are optional. A fresh offline checkout must load without errors.
 for plugin in "$HOME/.zsh/zsh-completions/src"; do
     [[ ! -d "$plugin" ]] || fpath=("$plugin" $fpath)

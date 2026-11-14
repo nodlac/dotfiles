@@ -17,11 +17,11 @@ separately when needed. The current entry points are `setup.sh` and `tests/run.s
 | Existing behavior | New location / disposition |
 | --- | --- |
 | Shared PATH, editor, pyenv, Go PATH, history, completion, vi cursor, word jumps | `config/shared/zshenv`, `zshrc`; PATH deduplication and optional dependency guards |
-| Cloudflare tunnel and SQL export functions | Preserved in `config/optional/helpers.zsh`; explicitly source from an approved local override after reviewing external tool dependencies. No function runs just by sourcing it. |
+| Cloudflare tunnel and SQL export functions | `config/optional/helpers.zsh`; setup asks on a TTY or accepts `--enable-helpers`. No function runs just by sourcing it. |
 | `dtf`, test and quick-commit helpers | Conventional checkout-scoped `dtf`, `dtf-test`, explicit `dtf-quick-commit`; native `df` untouched |
 | Platform installer aliases | Replaced by `dotfiles-setup`; obsolete wrappers and old script paths removed |
 | Server helpers, prompt, tmux attach | `machines/callisto.zsh`; duplicate `.zsh/.server.zsh` removed; no environment-file role detection |
-| Personal / work-specific shell profiles | Existing tracked files left unchanged and unmanaged; never implicitly sourced. Owner-approved settings belong in `local.zsh`. No private work notes inspected. |
+| Personal / work-specific shell profiles | Owner-approved `.zsh/.nodlac.zsh` and `.zsh/.vidangel.zsh` now load on all devices with OS-specific guards. Truly local overrides remain in `local.zsh`. |
 | Shared tmux navigation, restore, theme, mouse, clipboard, pane dimming | `config/shared/tmux.conf`; TPM guarded when missing; zoom moved to prefix-z because prefix-m previously got overwritten by mouse-toggle |
 | Callisto yerba-mate shortcut | `machines/callisto.tmux.conf`, explicit machine selection |
 | Work todo header / toggle bindings | Original config preserved as `.dotfiles/.tmux.conf` in the audit commit above. Required `tmux-todo.sh` is not tracked in the audited checkout. Do not activate a broken helper or read private notes to reconstruct it. Owner must recover/review it separately, then add an approved local tmux override. |
@@ -37,9 +37,9 @@ separately when needed. The current entry points are `setup.sh` and `tests/run.s
 | Source-built tmux / downloaded Neovim upgrades on Ubuntu | Historical recipes remain in Git history for review. Packaged tmux 3.4 is supported; obtain verified versioned tools separately rather than deleting/replacing `~/.local/nvim` or overwriting binaries. |
 | Agent dashboard checkout/install | Remains a separate repository/task. Bootstrap never pulls, merges, or executes its installer. Keep existing checkout and local branches. |
 | `tools/install.sh` and other work/personal scripts | Retained at existing paths, not automatically executed or linked into home/PATH; review dependencies separately. No blanket `~/tools` symlink. |
-| Docker setup / groups / services | Manual, separately approved. Optional distro Docker packages remain in workstation CLI manifests; no daemon/group/firewall changes by setup. |
+| Docker setup / groups / services | `--configure-system` explicitly enables native Linux Docker (plus NetworkManager/Bluetooth in desktop mode). No group/firewall changes; required service packages must be installed. |
 | Arch editor alternatives, keyd, NetworkManager/Bluetooth services | Reference recipe remains in Git history. No appending to unrelated shell files or writing `/etc/keyd` automatically. |
-| macOS key repeat, Spotlight/hotkeys, Karabiner enablement / caps-to-Escape | Reference recipes remain in Git history. Rule asset linked only in desktop mode; activation, live JSON edits, OS defaults and permissions require separate owner review. |
+| macOS key repeat, Spotlight/hotkeys, Karabiner enablement / caps-to-Escape | `--configure-system` with desktop mode applies key repeat and hotkeys. Karabiner asset is linked in desktop mode; live rule activation and permissions remain a follow-up. |
 | Login shell changes | Manual `chsh` using the actual installed/approved zsh path; setup does not alter account state |
 | Credential/environment file creation or loading | Removed from automatic bootstrap/runtime config. Existing files remain untouched; owner controls any explicit local credential integration. |
 | Git bare/worktree/hooks configuration changes | Removed from setup. Safe, reviewed normal-clone migration is documented; hook installation is explicit. |
@@ -47,8 +47,8 @@ separately when needed. The current entry points are `setup.sh` and `tests/run.s
 
 ## Optional helper example
 
-After reviewing the preserved helper source and its dependencies, an owner may
-add this to their own `~/.config/dotfiles/local.zsh`:
+Prefer `./setup.sh --enable-helpers` after reviewing dependencies. Alternatively,
+an owner may add this to their own `~/.config/dotfiles/local.zsh`:
 
 ```zsh
 source "$DOTFILES_ROOT/config/optional/helpers.zsh"
