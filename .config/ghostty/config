@@ -2,7 +2,6 @@
 
 gtk-single-instance = false
 
-keybind = ctrl+h=unbind
 keybind = super+enter=unbind
 
 # Mac remap: physical Alt/Option is Super. Send tmux's Alt+hjkl sequences.
@@ -31,3 +30,9 @@ adjust-underline-position = 4
 
 keybind = ctrl+shift+n=new_window
 keybind = ctrl+shift+t=new_tab
+
+# Ghostty splits: only consumed when a split exists that way; otherwise ctrl+hjkl reaches tmux.
+keybind = performable:ctrl+h=goto_split:left
+keybind = performable:ctrl+j=goto_split:down
+keybind = performable:ctrl+k=goto_split:up
+keybind = performable:ctrl+l=goto_split:right
