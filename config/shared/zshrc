@@ -112,7 +112,10 @@ fi
 bindkey "^[[1;5D" backward-word
 bindkey "^[[1;5C" forward-word
 # vi yanks only fill zsh's CUTBUFFER; outside tmux copy-mode nothing reaches the system clipboard.
-if (( $+commands[pbcopy] )); then _clip_cmd=(pbcopy)
+# Over SSH a local tool would hit the remote's clipboard; OSC 52 rides the tty (and tmux set-clipboard) back to the local terminal.
+_clip_osc52() { printf '\e]52;c;%s\a' "$(base64 | tr -d '\n')" > /dev/tty }
+if [[ -n $SSH_TTY ]]; then _clip_cmd=(_clip_osc52)
+elif (( $+commands[pbcopy] )); then _clip_cmd=(pbcopy)
 elif [[ -n $WAYLAND_DISPLAY ]] && (( $+commands[wl-copy] )); then _clip_cmd=(wl-copy)
 elif (( $+commands[xclip] )); then _clip_cmd=(xclip -selection clipboard)
 fi
