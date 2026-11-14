@@ -49,6 +49,7 @@ dtf-quick-commit() {
     git -C "$DOTFILES_ROOT" push
 }
 alias python=python3
+alias tm='tmux attach-session'
 alias tmux-start='tmux new-session -A -s notes'
 alias settings='tmux new-session -A -s settings'
 dotfiles-setup() { bash "$DOTFILES_ROOT/setup.sh" "$@"; }
