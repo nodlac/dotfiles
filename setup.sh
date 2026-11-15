@@ -122,7 +122,9 @@ if [ "$profile" = desktop ]; then
     case "$DF_OS" in
         macos)
             add_link "$ROOT/.aerospace.toml" "$HOME/.aerospace.toml"
-            add_link "$ROOT/.config/karabiner/assets/complex_modifications/linux-ctrl-swap.json" "$HOME/.config/karabiner/assets/complex_modifications/linux-ctrl-swap.json" ;;
+            for rule in linux-ctrl-swap linux-alt-move; do
+                add_link "$ROOT/.config/karabiner/assets/complex_modifications/$rule.json" "$HOME/.config/karabiner/assets/complex_modifications/$rule.json"
+            done ;;
         linux)
             case "$DF_DISTRO" in
                 arch|endeavouros)

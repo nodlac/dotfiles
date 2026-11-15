@@ -209,6 +209,7 @@ class SetupTests(unittest.TestCase):
         asset = self.repo / '.config/karabiner/assets/complex_modifications/linux-ctrl-swap.json'
         asset.parent.mkdir(parents=True)
         asset.write_text('{}')
+        asset.with_name('linux-alt-move.json').write_text('{}')
         bindir = self.base / 'bin'
         bindir.mkdir()
         tool = bindir / 'defaults'
