@@ -756,14 +756,14 @@ class SourceChecks(unittest.TestCase):
             self.assertIn('focus --boundaries-action wrap-around-the-workspace ' + direction,
                           bindings['ctrl-shift-' + key])
             self.assertEqual(bindings['alt-shift-' + key], "'move " + direction + "'")
+        jumper = (ROOT / 'tools/aerospace-session').read_text()
         for key, session in {'s': 'settings', 'n': 'notes', 'a': 'agency-admin',
                              'p': 'callisto', 'y': 'yerba-mate'}.items():
             command = bindings['alt-' + key]
             self.assertIn("'workspace 2'", command)
-            self.assertIn('has-session -t =' + session, command)
-            self.assertIn('new-session -d -s ' + session, command)
-            self.assertIn('switch-client -t =' + session, command)
-        self.assertIn('$HOME/clients/client-dashboard', bindings['alt-a'])
+            self.assertIn('tools/aerospace-session ' + key + "'", command)
+            self.assertRegex(jumper, r'(?m)^' + key + ' ' + session + r'\b')
+        self.assertRegex(jumper, r'(?m)^a agency-admin ~/clients/client-dashboard$')
         for obsolete in ['v-web', 'v-backend', 'v-apple', 'v-android', 'v-hoover',
                          'v-control-center', 'v-psql', 'tunnels']:
             self.assertNotIn(obsolete, config)

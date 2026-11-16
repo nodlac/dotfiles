@@ -1,0 +1,29 @@
+#!/bin/sh
+# alt-<key> tmux jump. machines/<hostname>.aerospace lines ("key session [dir]") override the defaults.
+key=$1
+root=$(cd "$(dirname "$0")/.." && pwd)
+host=$(hostname -s | tr '[:upper:]' '[:lower:]')
+
+# Override sessions match by prefix (v-hoover -> v-hoover-7); defaults match exactly.
+line=$(awk -v k="$key" '$1 == k' "$root/machines/$host.aerospace" 2>/dev/null)
+match=
+if [ -z "$line" ]; then
+    match='='
+    line=$(awk -v k="$key" '$1 == k' <<'DEFAULTS'
+s settings
+n notes
+a agency-admin ~/clients/client-dashboard
+p callisto
+y yerba-mate
+DEFAULTS
+)
+fi
+[ -n "$line" ] || exit 0
+
+set -- $line
+session=$2
+dir=${3:-$HOME}
+case $dir in "~"*) dir=$HOME${dir#\~} ;; esac
+
+tmux has-session -t "$match$session" 2>/dev/null || tmux new-session -d -s "$session" -c "$dir"
+tmux switch-client -t "$match$session"

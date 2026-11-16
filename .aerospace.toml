@@ -118,12 +118,18 @@ run = 'layout floating'
     alt-shift-9 = 'move-node-to-workspace 9'
     alt-shift-0 = 'move-node-to-workspace 10'
 
-    # i3 session jumps. Resolve portable project paths under $HOME on each host.
-    alt-s = ['workspace 2', 'exec-and-forget tmux has-session -t =settings 2>/dev/null || tmux new-session -d -s settings; tmux switch-client -t =settings']
-    alt-n = ['workspace 2', 'exec-and-forget tmux has-session -t =notes 2>/dev/null || tmux new-session -d -s notes; tmux switch-client -t =notes']
-    alt-a = ['workspace 2', 'exec-and-forget tmux has-session -t =agency-admin 2>/dev/null || tmux new-session -d -s agency-admin -c "$HOME/clients/client-dashboard"; tmux switch-client -t =agency-admin']
-    alt-p = ['workspace 2', 'exec-and-forget tmux has-session -t =callisto 2>/dev/null || tmux new-session -d -s callisto; tmux switch-client -t =callisto']
-    alt-y = ['workspace 2', 'exec-and-forget tmux has-session -t =yerba-mate 2>/dev/null || tmux new-session -d -s yerba-mate; tmux switch-client -t =yerba-mate']
+    # tmux session jumps; per-machine overrides live in machines/<hostname>.aerospace.
+    alt-s = ['workspace 2', 'exec-and-forget ~/.local/share/dotfiles/tools/aerospace-session s']
+    alt-n = ['workspace 2', 'exec-and-forget ~/.local/share/dotfiles/tools/aerospace-session n']
+    alt-a = ['workspace 2', 'exec-and-forget ~/.local/share/dotfiles/tools/aerospace-session a']
+    alt-p = ['workspace 2', 'exec-and-forget ~/.local/share/dotfiles/tools/aerospace-session p']
+    alt-y = ['workspace 2', 'exec-and-forget ~/.local/share/dotfiles/tools/aerospace-session y']
+    alt-u = ['workspace 2', 'exec-and-forget ~/.local/share/dotfiles/tools/aerospace-session u']
+    alt-i = ['workspace 2', 'exec-and-forget ~/.local/share/dotfiles/tools/aerospace-session i']
+    alt-o = ['workspace 2', 'exec-and-forget ~/.local/share/dotfiles/tools/aerospace-session o']
+    alt-c = ['workspace 2', 'exec-and-forget ~/.local/share/dotfiles/tools/aerospace-session c']
+    alt-e = ['workspace 2', 'exec-and-forget ~/.local/share/dotfiles/tools/aerospace-session e']
+    alt-t = ['workspace 2', 'exec-and-forget ~/.local/share/dotfiles/tools/aerospace-session t']
 
     alt-shift-c = 'reload-config'
 
